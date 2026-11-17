@@ -190,3 +190,5 @@ Todavía no implementados. Esta entrega define esquema, RLS, tipos y contrato de
 - [x] Definir políticas RLS según admin, optometrista, vendedor y cliente (incluidas en migración; pendientes de despliegue).
 - [ ] Directorio de optometristas con campos mínimos y consulta de horarios disponibles para el flujo de autoagendamiento.
 - [ ] Integración y pruebas contra Supabase Auth/Data API una vez aprobado el proyecto de destino.
+- [ ] (Solicitud Frontend) Considerar campo o etiqueta en `frames` (p. ej. `segment: 'oftalmico' | 'solar'` o booleano `is_sunglasses`) para distinguir en BD entre "Armazones oftálmicos" y "Lentes de sol" dentro del filtro de categorías del catálogo.
+- [ ] (Solicitud Frontend) Server Action o endpoint para listar `profiles` y ejecutar cambio de rol (`updateUserRole(userId, role)`) desde `/dashboard/usuarios` con sesión `admin`.
