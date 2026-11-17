@@ -1,9 +1,13 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { RoleProvider } from "@/components/providers/RoleProvider";
+import { Navbar } from "@/components/layout/Navbar";
+import { Footer } from "@/components/layout/Footer";
 
 export const metadata: Metadata = {
-  title: "Optizap | Plataforma Integral para Ópticas",
-  description: "Gestión clínica, inventario, catálogo de marcas y punto de venta para ópticas.",
+  title: "Optizap | Clínica Óptica Premium & Boutique de Marcas",
+  description:
+    "Plataforma integral para clínica óptica: catálogo oficial Ray-Ban, Oakley, Persol, Tom Ford, Essilor y ZEISS, agendamiento y expediente clínico.",
 };
 
 export default function RootLayout({
@@ -13,8 +17,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="es">
-      <body className="min-h-screen bg-slate-50 text-slate-900 antialiased">
-        {children}
+      <body className="flex min-h-screen flex-col bg-slate-50 text-slate-900 antialiased">
+        <RoleProvider>
+          <Navbar />
+          <div className="flex-1">{children}</div>
+          <Footer />
+        </RoleProvider>
       </body>
     </html>
   );
