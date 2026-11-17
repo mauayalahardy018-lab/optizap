@@ -154,7 +154,14 @@ export type Database = {
       ]>;
     };
     Views: { [_ in never]: never };
-    Functions: { [_ in never]: never };
+    Functions: {
+      get_available_slots: {
+        Args: { p_date: string; p_optometrist_id: string; p_duration_minutes?: number };
+        Returns: AvailableSlot[];
+      };
+      list_optometrists: { Args: Record<string, never>; Returns: OptometristSummary[] };
+      create_clinical_exam: { Args: { p_record: Json; p_prescriptions: Json }; Returns: Json };
+    };
     Enums: {
       user_role: UserRole;
       brand_category: BrandCategory;
@@ -173,3 +180,33 @@ export type TableName = keyof Database["public"]["Tables"];
 export type Tables<T extends TableName> = Database["public"]["Tables"][T]["Row"];
 export type TablesInsert<T extends TableName> = Database["public"]["Tables"][T]["Insert"];
 export type TablesUpdate<T extends TableName> = Database["public"]["Tables"][T]["Update"];
+
+// Service inputs deliberately omit server-owned identifiers and timestamps.
+export type ProductKind = "frames" | "lenses";
+export type Product = Tables<"frames"> | Lens;
+export type CatalogProduct = Product & { brand: Brand };
+export type FrameInput = Omit<TablesInsert<"frames">, "id" | "created_at" | "updated_at">;
+export type LensInput = Omit<TablesInsert<"lenses">, "id" | "created_at" | "updated_at">;
+export type PatientInput = Omit<TablesInsert<"patients">, "id" | "created_at" | "updated_at">;
+export type ClinicalRecordInput = Omit<TablesInsert<"clinical_records">, "id" | "created_at" | "updated_at">;
+export type EyePrescriptionInput = Omit<TablesInsert<"prescriptions">, "id" | "clinical_record_id" | "created_at" | "updated_at">;
+export type ClinicalExamInput = { record: ClinicalRecordInput; prescriptions: EyePrescriptionInput[] };
+export type ClinicalExam = { record: ClinicalRecord; prescriptions: Prescription[] };
+export type ClinicalHistory = { patient: Patient; records: (ClinicalRecord & { prescriptions: Prescription[] })[]; total: number; limit: number; offset: number };
+export type AppointmentInput = Pick<Appointment, "patient_id" | "optometrist_id" | "starts_at" | "ends_at"> & { reason?: string | null };
+export type RescheduleInput = Pick<Appointment, "starts_at" | "ends_at"> & { optometrist_id?: string };
+export type AvailableSlot = { starts_at: string; ends_at: string };
+export type OptometristSummary = Pick<UserProfile, "id" | "full_name">;
+export type Page<T> = { items: T[]; total: number; limit: number; offset: number };
+export type CatalogFilters = {
+  brand_id?: string;
+  category?: BrandCategory;
+  search?: string;
+  min_price?: number;
+  max_price?: number;
+  include_inactive?: boolean;
+  limit?: number;
+  offset?: number;
+};
+export type ApiErrorCode = "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "CONFLICT" | "SLOT_UNAVAILABLE" | "UNAVAILABLE" | "INTERNAL_ERROR";
+export type ApiResponse<T> = { data: T } | { error: { code: ApiErrorCode; message: string } };

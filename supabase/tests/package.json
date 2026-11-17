@@ -2,6 +2,9 @@
   "name": "optizap-database-tests",
   "private": true,
   "type": "module",
-  "scripts": { "test": "node --test schema.test.mjs" },
-  "devDependencies": { "@electric-sql/pglite": "0.5.16", "typescript": "5.9.3" }
+  "scripts": {
+    "test": "node --import tsx --test schema.test.mjs services.test.ts",
+    "test:http": "node --test http.integration.test.mjs"
+  },
+  "devDependencies": { "@electric-sql/pglite": "0.5.16", "@supabase/supabase-js": "2.119.0", "tsx": "4.23.15", "typescript": "5.9.3" }
 }

@@ -3,11 +3,12 @@
 Contrato compartido entre Backend (`feat/backend`) y Frontend (`feat/frontend`).
 Fuente de tipos: `src/types/database.ts`. Migración inicial:
 `supabase/migrations/20261117230647_optizap_initial_schema.sql`.
+Funciones de servicios: `supabase/migrations/20261117233231_service_rpcs.sql`.
 
 ## 1. Estado e invariantes
 
 - La migración está preparada para una base Supabase nueva. No se ha aplicado al proyecto remoto; esta entrega solo publica archivos en GitHub.
-- No se crean Server Actions, Route Handlers ni RPC públicos en este módulo. Los endpoints de tablas descritos abajo son la Data API de Supabase y existirán al aplicar la migración con la Data API habilitada.
+- La capa Next.js agrega servicios en `src/services`, un cliente SSR en `src/lib/supabase/server.ts` y Route Handlers bajo `/api`; ver sección 6. Los endpoints directos de tablas de la sección 4 pertenecen a la Data API de Supabase. Ambos requieren aplicar las migraciones antes de usarlos.
 - Se conserva `UserRole = 'admin' | 'optometrista' | 'vendedor' | 'cliente'`. **`vendedor` representa Recepción/Ventas**; no enviar `recepcion`.
 - Todas las tablas tienen RLS, UUID como PK, `created_at` y `updated_at` (`timestamptz`, asignados por defecto; un trigger actualiza `updated_at`).
 - Fechas con hora: cadenas ISO 8601 con offset; almacenar como `timestamptz`, presentar en `America/Mexico_City`. `birth_date` usa `YYYY-MM-DD`.
@@ -137,7 +138,7 @@ Usar clave publicable y, para datos privados, JWT del usuario. El cliente debe i
 
 Los filtros deben codificarse con el SDK o URLSearchParams. Paginar el catálogo y la agenda con limit/offset (máximo de API local: 1000 filas). En escrituras, enviar Content-Type: application/json; las respuestas sin Prefer: return=representation no incluyen filas.
 
-Las escrituras parciales usan PATCH con filtro por ID y un objeto `TablesUpdate<T>`, sujeto a los permisos de la sección 2. Para editar el perfil, enviar únicamente full_name/avatar_url; role solo con sesión Admin. RLS puede devolver [] para una fila invisible en SELECT o UPDATE; no tratar ese resultado como una actualización exitosa. No se implementa en este módulo un directorio público de optometristas ni una API de horarios libres.
+Las escrituras parciales usan PATCH con filtro por ID y un objeto `TablesUpdate<T>`, sujeto a los permisos de la sección 2. Para editar el perfil, enviar únicamente full_name/avatar_url; role solo con sesión Admin. RLS puede devolver [] para una fila invisible en SELECT o UPDATE; no tratar ese resultado como una actualización exitosa. La capa Next.js traduce una escritura sin fila visible a NOT_FOUND. El directorio de optometristas y la consulta de disponibilidad requieren sesión y se describen en la sección 6.
 
 ### Errores SQL/PostgREST esperados
 
@@ -157,14 +158,17 @@ npm ci --prefix supabase/tests
 npm test --prefix supabase/tests
 ```
 
-Las pruebas crean una base efímera, simulan las interfaces mínimas de Supabase Auth, aplican la migración real y ejecutan consultas con los roles anon/authenticated. Cubren backfill, alta segura, sincronización de email, aislamiento por paciente, permisos por rol, escritura clínica, cancelaciones, SKU, medidas, graduaciones y restricciones de agenda. También comparan columnas, nullabilidad, campos obligatorios de Insert y relaciones de los tipos TypeScript contra los metadatos reales de PostgreSQL. No sustituyen una prueba de integración del servicio Auth ni de la Data API desplegada.
+Las pruebas SQL crean una base efímera, simulan las interfaces mínimas de Supabase Auth, aplican las migraciones reales y ejecutan consultas con los roles anon/authenticated. Cubren backfill, alta segura, sincronización de email, aislamiento por paciente, permisos por rol, escritura clínica, cancelaciones, SKU, medidas, graduaciones y restricciones de agenda. También comparan columnas, nullabilidad, campos obligatorios de Insert y relaciones de los tipos TypeScript contra PostgreSQL; verifican que la disponibilidad excluya citas ajenas sin exponerlas y que un error en el segundo ojo revierta la consulta y el primer ojo. Las pruebas de servicios utilizan los query builders reales de supabase-js con transporte HTTP/Auth simulado para verificar filtros, payloads, permisos, rutas y errores. No sustituyen una prueba de integración del servicio Auth ni de la Data API desplegada.
 
 Comprobaciones del proyecto (tras instalar sus dependencias):
 
 ```powershell
 npx tsc --noEmit --incremental false
 npm run build
+npm run test:http --prefix supabase/tests
 ```
+
+`test:http` requiere primero `npm run build`. Levanta el servidor Next.js compilado y un stub local de Supabase para comprobar cookies SSR reales, verificación de usuario, catálogo público, rechazo de escrituras por rol y traducción del conflicto de agenda a HTTP 409. No usa el proyecto remoto ni claves reales.
 
 Para una aplicación futura a un proyecto **vacío y confirmado**, revisar primero sus tablas y el historial de migraciones. No ejecutar sobre el prototipo previo sin reconciliar su esquema. CLI utilizada y fijada: 2.101.0.
 
@@ -179,14 +183,113 @@ No se ejecutaron estos comandos remotos en esta entrega. La configuración local
 
 Referencias de implementación: [RLS](https://supabase.com/docs/guides/database/postgres/row-level-security), [datos de usuario](https://supabase.com/docs/guides/auth/managing-user-data), [privilegios por columna](https://supabase.com/docs/guides/database/postgres/column-level-security).
 
-## 6. Server Actions / Route Handlers
+## 6. Servicios Next.js y Route Handlers
 
-Todavía no implementados. Esta entrega define esquema, RLS, tipos y contrato de tablas.
+Implementación: `src/services/{catalog,appointments,patients,users}.ts`; rutas: `src/app/api/[...path]/route.ts`. Los servicios reciben un `SupabaseClient<Database>` con sesión del usuario mediante `createCatalogService(db)`, `createAppointmentService(db)`, `createPatientService(db)` o `createUserService(db)`. Los métodos se consumen en servidor; Frontend puede usar los endpoints de esta sección con `fetch`.
+
+### Sesión, configuración y respuestas
+
+- Configurar `NEXT_PUBLIC_SUPABASE_URL` y `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (se admite como fallback `NEXT_PUBLIC_SUPABASE_ANON_KEY` del scaffolding). El cliente de cada solicitud usa las cookies de Supabase SSR, verifica al usuario con `auth.getUser()` y consulta su rol en `profiles`. No se usa service_role ni metadata editable para autorización.
+- El inicio de sesión del Frontend debe usar el cliente de `@supabase/ssr` para que la sesión se comparta por cookies. Estas rutas no aceptan un JWT arbitrario por body ni crean sesiones de login. Para llamadas `fetch` desde el mismo origen, las cookies se envían por defecto.
+- Las rutas escriben cookies renovadas desde el Route Handler y responden `Cache-Control: private, no-store`. No almacenar respuestas clínicas en cachés públicas.
+- El scaffolding declara SSR 0.5.x junto con un rango abierto de supabase-js; el adaptador normaliza la diferencia de orden de genéricos entre versiones en un solo punto. Las consultas de servicios permanecen tipadas con `Database`. No se cambian dependencias del Frontend en esta entrega.
+- Éxito: `{ data: T }`, HTTP 200, o 201 al crear. Listados paginados: `{ data: { items: T[], total, limit, offset } }`.
+- Error: `{ error: { code: ApiErrorCode, message: string } }`, sin SQL, datos clínicos ni credenciales. Códigos: `VALIDATION_ERROR` (400), `UNAUTHENTICATED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `SLOT_UNAVAILABLE` (409), `UNAVAILABLE` (503) e `INTERNAL_ERROR` (500).
+- Las escrituras JSON requieren `Content-Type: application/json`, máximo 65536 caracteres, sin query string y sin campos desconocidos. Las solicitudes con Origin de otro sitio o `Sec-Fetch-Site: cross-site` son rechazadas. Los DELETE de desactivación/cancelación no requieren body.
+- `id`, `created_at`, `updated_at`, `created_by` y campos de joins no son entradas editables en estos servicios. UUID, enums, fechas, rangos y precisión decimal se validan antes de escribir. Las RLS y restricciones SQL siguen siendo la autoridad final.
+- La paginación admite `limit` entero 1–100 (default 25) y `offset` 0–100000 (default 0), con orden estable. Los parámetros repetidos son inválidos.
+
+### Catálogo
+
+| Método de createCatalogService(db) | Endpoint | Entrada | T de respuesta |
+| --- | --- | --- | --- |
+| getBrands() | GET /api/brands | Sin parámetros | Brand[] activas |
+| getBrandBySlug(slug) | GET /api/brands/:slug | Slug exacto | Brand |
+| listProducts(kind, filters?) | GET /api/catalog/:kind | CatalogFilters por query | Page<CatalogProduct> |
+| getProduct(kind, { id }) | GET /api/catalog/:kind/:id | UUID exacto | CatalogProduct |
+| getProduct(kind, { sku }) | GET /api/catalog/:kind/sku/:sku | SKU exacto codificado como segmento URL | CatalogProduct |
+| createProduct(kind, input) | POST /api/catalog/:kind | FrameInput o LensInput | Product |
+| updateProduct(kind, id, input) | PATCH /api/catalog/:kind/:id | Partial<FrameInput> o Partial<LensInput>; al menos un campo | Product |
+| deactivateProduct(kind, id) | DELETE /api/catalog/:kind/:id | Sin body | Product con is_active=false |
+
+- `kind`: exclusivamente `frames` o `lenses`. Material, medidas y campos requeridos conservan los valores de la sección 2. Precio y medidas aceptan máximo dos decimales; stock es entero no negativo.
+- Filtros: `brand_id`, `category` (categoría de **la marca**, no tipo de mica), `search` (SKU **o** nombre/modelo), `min_price`, `max_price`, `include_inactive`, `limit`, `offset`.
+- `search`: 1–80 caracteres; letras, números, espacios, guion, diagonal y guion bajo. Se busca por coincidencia parcial sin distinguir mayúsculas; el guion bajo se trata literalmente. Se rechazan expresiones de filtro PostgREST en el texto.
+- Catálogo público: productos activos de marcas activas. `include_inactive=true` requiere Admin. Un detalle no visible devuelve 404. Admin puede consultar detalles de inactivos.
+- Crear, actualizar precio/stock u otros campos y desactivar requieren Admin tanto en servicio como por RLS. DELETE es baja lógica; no borra físicamente productos.
+
+Ejemplo: `GET /api/catalog/frames?category=lujo&search=Ray-Ban&min_price=1000&max_price=5000&limit=20`.
+
+### Citas y disponibilidad
+
+| Método de createAppointmentService(db) | Endpoint | Entrada | T de respuesta |
+| --- | --- | --- | --- |
+| listOptometrists() | GET /api/optometrists | Sin parámetros | OptometristSummary[]: solo id/full_name |
+| getAvailableSlots(input) | GET /api/appointments/availability | date=YYYY-MM-DD, optometrist_id; duration_minutes opcional (30) | AvailableSlot[] |
+| listAppointments(filters?) | GET /api/appointments | patient_id?, optometrist_id?, from?, to?, limit?, offset? | Page<Appointment> según RLS |
+| createAppointment(input) | POST /api/appointments | AppointmentInput: patient_id, optometrist_id, starts_at, ends_at, reason? | Appointment |
+| rescheduleAppointment(id, input) | PATCH /api/appointments/:id | RescheduleInput: starts_at, ends_at; optometrist_id opcional | Appointment |
+| cancelAppointment(id) | DELETE /api/appointments/:id | Sin body | Appointment con status=cancelled |
+
+- Todos requieren sesión. `from`/`to` filtran el inicio en intervalo [from,to); fechas ISO con zona, no fechas sin offset.
+- Disponibilidad: sugerencias entre **09:00 y 18:00, todos los días**, zona `America/Mexico_City`, con inicios cada 15 minutos. Duración 15–240, múltiplo de 15. La fecha debe ser hoy o estar dentro de los próximos 90 días. No hay calendario de días festivos, descansos ni horario individual en este esquema. Esta ventana limita las sugerencias; la creación de citas conserva las reglas de la sección 2, sin imponer esa ventana como horario del negocio.
+- La consulta SQL excluye toda ocupación del optometrista, incluso citas invisibles por RLS para el cliente, y devuelve únicamente `starts_at, ends_at`. No comprueba conflictos del paciente específico ni aparta horarios; el INSERT/UPDATE verifica ambos traslapes mediante EXCLUDE. La propia cita aparece ocupada al consultar disponibilidad para reprogramarla.
+- Reprogramar requiere Admin, Recepción u optometrista asignado; solo sobre scheduled/confirmed. Clientes cancelan y solicitan al personal la reprogramación. Las restricciones SQL validan propiedad y asignación.
+- Cancelar solo actualiza scheduled/confirmed; un cliente además solo puede cancelar las propias futuras. Una fila inexistente, invisible o que ya no admite esa operación devuelve 404, nunca éxito vacío. Las restricciones por rol pueden producir 403.
+- Si otra solicitud ocupa el horario entre consulta y escritura, la base devuelve `23P01`; el endpoint responde HTTP 409, código `SLOT_UNAVAILABLE`, mensaje: “El horario ya está ocupado para el paciente o el optometrista. Elige otro horario.”
+
+### Pacientes y expediente clínico
+
+| Método de createPatientService(db) | Endpoint | Entrada | T de respuesta |
+| --- | --- | --- | --- |
+| listPatients(filters?) | GET /api/patients | search? sobre nombre, limit?, offset? | Page<Patient> |
+| registerPatient(input) | POST /api/patients | PatientInput: full_name; profile_id?, birth_date?, phone?, email? | Patient |
+| getHistory(patientId, pagination?) | GET /api/patients/:id/history | limit?, offset? | ClinicalHistory |
+| getMyHistory(pagination?) | GET /api/me/history | limit?, offset? | ClinicalHistory del cliente autenticado |
+| createClinicalExam(input) | POST /api/clinical-exams | ClinicalExamInput: { record: ClinicalRecordInput, prescriptions: EyePrescriptionInput[] } | ClinicalExam |
+
+- Listado y registro de pacientes: Admin, Optometrista o Recepción, conforme al contrato previo. Correo válido si se proporciona; nacimiento entre 1900-01-01 y hoy. Para vincular una cuenta, el personal envía el UUID en profile_id.
+- Historial: Admin/Optometrista, o el propio cliente mediante RLS. Recepción no puede leerlo. `ClinicalHistory` contiene `patient`, `records` con sus `prescriptions`, `total`, `limit`, `offset`; orden por examined_at descendente. La cuenta sin paciente vinculado devuelve 404.
+- Crear consulta: Admin/Optometrista. En `record`, patient_id y optometrist_id son obligatorios; los campos clínicos restantes son los de la sección 2. Si el caller es optometrista, RLS obliga a que sea el autor. Admin puede indicar un optometrista existente.
+- `prescriptions` contiene uno o dos ojos únicos, OD/OI. Cada objeto requiere eye/sphere; admite cylinder, axis, addition, pupillary_distance_mm (monocular) y visual_acuity. Eje obligatorio si cilindro != 0; se aplican los rangos SQL y máximo dos decimales.
+- Se ejecuta una única RPC transaccional: si falla un ojo, se revierten la consulta y todos los ojos. No se escribe parcialmente el expediente. El servicio no crea un historial sin al menos un ojo. No hay escritura clínica para cliente o Recepción.
+
+Ejemplo de cuerpo para registrar ambos ojos:
+
+```json
+{
+  "record": { "patient_id": "<UUID paciente>", "optometrist_id": "<UUID optometrista>", "notes": "Seguimiento" },
+  "prescriptions": [
+    { "eye": "OD", "sphere": -1.25, "cylinder": -0.5, "axis": 90, "addition": 0, "pupillary_distance_mm": 31 },
+    { "eye": "OI", "sphere": -1, "cylinder": 0, "addition": 0, "pupillary_distance_mm": 31 }
+  ]
+}
+```
+
+### Usuarios y roles
+
+| Método de createUserService(db) | Endpoint | Entrada | T de respuesta |
+| --- | --- | --- | --- |
+| getCurrentUserProfile() | GET /api/me/profile | Sesión, sin parámetros | UserProfile |
+| listProfiles(pagination?) | GET /api/users | limit?, offset? | Page<UserProfile> |
+| updateRole(id, input) | PATCH /api/users/:id/role | { role: UserRole } | UserProfile |
+
+Listar perfiles y cambiar roles requiere Admin. Solo se acepta role, con valor admin/optometrista/vendedor/cliente; no se editan email, ID ni otros campos en ese endpoint. RLS y el trigger de perfiles vuelven a validar el permiso aunque cambie el rol entre comprobación y escritura. El perfil propio se obtiene para cualquier sesión válida; una sesión ausente devuelve 401.
+
+### RPC agregadas por la segunda migración
+
+| RPC pública (SECURITY INVOKER) | Args de Database | Retorno |
+| --- | --- | --- |
+| get_available_slots | { p_date: string, p_optometrist_id: UUID, p_duration_minutes?: number } | AvailableSlot[] |
+| list_optometrists | {} | OptometristSummary[] |
+| create_clinical_exam | { p_record: Json, p_prescriptions: Json } | Json con forma ClinicalExam |
+
+EXECUTE restringido a authenticated; anon no puede llamarlas. Las dos primeras delegan en helpers SECURITY DEFINER del esquema private con comprobación de identidad/perfil y salida mínima. create_clinical_exam usa los permisos del usuario y mantiene las RLS existentes. No cambia ninguna tabla ni amplía sus políticas de lectura.
 
 ## Pendientes para Backend
 
-- [ ] Implementar Server Actions para obtener y filtrar el catálogo de marcas (`getBrands`, `getBrandBySlug`) y armazones (`getFrames`).
-- [ ] Implementar gestión de sesión y obtención del rol del usuario actual (`getCurrentUserProfile`).
+- [x] Consultas de catálogo: getBrands/getBrandBySlug y listProducts('frames', filtros), expuestas también por Route Handlers. No se exporta una Server Action llamada getFrames.
+- [x] Cliente SSR y getCurrentUserProfile vía GET /api/me/profile. El formulario de login y su sesión compartida por cookies deben integrarse desde Frontend.
 - [x] Definir políticas RLS según admin, optometrista, vendedor y cliente (incluidas en migración; pendientes de despliegue).
-- [ ] Directorio de optometristas con campos mínimos y consulta de horarios disponibles para el flujo de autoagendamiento.
+- [x] Directorio de optometristas con campos mínimos y horarios disponibles; aplicar la segunda migración para habilitar las RPC.
 - [ ] Integración y pruebas contra Supabase Auth/Data API una vez aprobado el proyecto de destino.

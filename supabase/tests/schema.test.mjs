@@ -199,6 +199,18 @@ test('Optizap migrations, constraints and RLS', async t => {
   await t.test('reception can confirm an appointment', () => as('authenticated', reception, () => db.exec(`update public.appointments set status='confirmed' where id='${appointment}'`)));
   await t.test('overlapping clinician bookings are rejected', () => denied(() => as('authenticated', reception, () => insert('appointments', { ...booking, patient_id: patient2, starts_at: '2099-01-01T10:15Z', ends_at: '2099-01-01T10:45Z' })), '23P01'));
   await t.test('overlapping patient bookings with different clinicians are rejected', () => denied(() => as('authenticated', reception, () => insert('appointments', { ...booking, optometrist_id: opto2, starts_at: '2099-01-01T10:15Z', ends_at: '2099-01-01T10:45Z' })), '23P01'));
+  await t.test('a conflicting reschedule fails and preserves the original slot', () => as('authenticated', reception, async () => {
+    await insert('appointments',{...booking,patient_id:patient2,starts_at:'2099-01-01T09:00Z',ends_at:'2099-01-01T09:30Z'});
+    await db.exec(`do $$ begin
+      begin
+        update public.appointments set starts_at='2099-01-01T09:15Z',ends_at='2099-01-01T09:45Z' where id='${appointment}';
+        raise exception 'Expected scheduling conflict';
+      exception when exclusion_violation then null;
+      end;
+    end $$;`);
+    const original = (await rows(`select starts_at from public.appointments where id='${appointment}'`))[0];
+    assert.equal(new Date(original.starts_at).toISOString(),'2099-01-01T10:00:00.000Z');
+  }));
   await t.test('adjacent slots are allowed', () => as('authenticated', reception, () => insert('appointments', { ...booking, starts_at: '2099-01-01T10:30Z' })));
   await t.test('cancelling releases the slot', () => as('authenticated', reception, async () => {
     await db.exec(`update public.appointments set status='cancelled' where id='${appointment}'`);
@@ -217,8 +229,56 @@ test('Optizap migrations, constraints and RLS', async t => {
   await t.test('clinical and appointment hard deletion is forbidden even for app admins', async () => {
     for (const table of ['patients', 'clinical_records', 'prescriptions', 'appointments']) await denied(() => as('authenticated', admin, () => db.exec(`delete from public.${table}`)));
   });
+  await t.test('availability hides other patients while excluding their appointments', () => as('authenticated', reception, async () => {
+    const day = (await rows("select ((now() at time zone 'America/Mexico_City')::date + 1)::text as day"))[0].day;
+    await db.query(`insert into public.appointments(patient_id,optometrist_id,starts_at,ends_at)
+      values ($1,$2,($3::date + time '10:00') at time zone 'America/Mexico_City',
+                   ($3::date + time '10:30') at time zone 'America/Mexico_City')`, [patient2,opto,day]);
+    await db.query("select set_config('request.jwt.claim.sub',$1,true)",[client]);
+    assert.equal((await rows(`select * from public.appointments where patient_id='${patient2}'`)).length,0);
+    const result = await db.query('select * from public.get_available_slots($1,$2,30)',[day,opto]);
+    assert.equal(result.rows.length,32);
+    for (const slot of result.rows) {
+      assert.deepEqual(Object.keys(slot).sort(),['ends_at','starts_at']);
+      const start = new Date(slot.starts_at).toISOString();
+      assert.ok(!['15:45','16:00','16:15'].includes(start.slice(11,16)));
+    }
+  }));
+  await t.test('availability rejects dates outside the 90-day booking horizon', () => denied(() => as('authenticated', client, () => db.query('select * from public.get_available_slots($1,$2,30)',['2099-01-01',opto])), '23514'));
+  await t.test('anonymous cannot query availability', () => denied(() => as('anon', null, () => db.query('select * from public.get_available_slots(current_date,$1,30)',[opto]))));
+  await t.test('users without a profile cannot query availability', () => denied(() => as('authenticated', uid(999), () => db.query('select * from public.get_available_slots(current_date,$1,30)',[opto]))));
+  await t.test('directory returns clinician IDs and names only', () => as('authenticated', client, async () => {
+    const result = await rows('select * from public.list_optometrists()');
+    assert.equal(result.length,2);
+    assert.ok(result.every(r => Object.keys(r).sort().join(',') === 'full_name,id'));
+  }));
+  const clinicalPayload = { patient_id: patient, optometrist_id: opto, notes: 'Atomic exam' };
+  await t.test('clinical RPC creates both eyes with the record in one transaction', () => as('authenticated', opto, async () => {
+    const before = await count('clinical_records');
+    const result = await db.query('select public.create_clinical_exam($1,$2) as exam',[clinicalPayload,[{ eye: 'OD',sphere: -1 },{ eye: 'OI',sphere: -2 }]]);
+    assert.equal(await count('clinical_records'),before+1);
+    assert.equal(result.rows[0].exam.prescriptions.length,2);
+    assert.ok(result.rows[0].exam.prescriptions.every(p => p.clinical_record_id === result.rows[0].exam.record.id));
+  }));
+  await t.test('invalid second eye rolls back examination and first eye', () => as('authenticated', opto, async () => {
+    const before = await count('clinical_records'), eyes = await count('prescriptions');
+    await db.exec(`do $$ begin
+      begin
+        perform public.create_clinical_exam('${JSON.stringify(clinicalPayload)}'::jsonb,
+          '[{"eye":"OD","sphere":-1},{"eye":"OI","sphere":99}]'::jsonb);
+        raise exception 'Expected invalid prescription';
+      exception when check_violation then null;
+      end;
+    end $$;`);
+    assert.equal(await count('clinical_records'),before);
+    assert.equal(await count('prescriptions'),eyes);
+  }));
+  await t.test('clinical RPC rejects client and reception', async () => {
+    for (const user of [client,reception]) await denied(() => as('authenticated', user, () => db.query('select public.create_clinical_exam($1,$2)',[clinicalPayload,[{ eye:'OD',sphere:0 }]])));
+  });
+  await t.test('clinical RPC preserves RLS author checks', () => denied(() => as('authenticated', opto2, () => db.query('select public.create_clinical_exam($1,$2)',[clinicalPayload,[{ eye:'OD',sphere:0 }]]))));
   await t.test('trigger helpers have no public execution grants', async () => {
-    const helpers = await rows("select p.proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='private' and p.proname <> 'current_role' and has_function_privilege('authenticated',p.oid,'EXECUTE')");
+    const helpers = await rows("select p.proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='private' and p.prorettype='trigger'::regtype and has_function_privilege('authenticated',p.oid,'EXECUTE')");
     assert.deepEqual(helpers, []);
   });
 });
