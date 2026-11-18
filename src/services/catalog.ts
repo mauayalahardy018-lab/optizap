@@ -8,7 +8,7 @@ const common = {
   stock: number(0,2147483647,true), image_url: nullable(text(2000)), is_active: boolean,
 };
 const rules = {
-  frames: { ...common, material: choice(["acetato","metal","titanio","tr90","mixto"]),
+  frames: { ...common, segment: nullable(choice(["oftalmico","solar"])), material: choice(["acetato","metal","titanio","tr90","mixto"]),
     shape: choice(["rectangular","redondo","aviador","cat-eye","cuadrado","ovalado"]),
     gender: choice(["unisex","hombre","mujer","infantil"]), color: text(100),
     lens_width_mm: decimal(20,90), bridge_width_mm: decimal(5,40), temple_length_mm: decimal(80,180), lens_height_mm: nullable(decimal(10,90)) },
@@ -40,17 +40,25 @@ export function createCatalogService(db: Client) {
       const filters = parse<CatalogFilters>(Object.fromEntries(Object.entries(input).filter(([k]) => !["limit","offset"].includes(k))), {
         brand_id: uuid, category, search: v => searchTerm(v), min_price: price, max_price: price,
         include_inactive: boolean,
+        segment: choice(["oftalmico","solar"]), material: rules[kind].material,
+        sort: choice(["featured","price_asc","price_desc"]),
       });
+      if (filters.segment && kind !== "frames") invalid("segment solo se aplica a armazones.");
       if (filters.min_price !== undefined && filters.max_price !== undefined && filters.min_price > filters.max_price) invalid("El precio mínimo no puede superar al máximo.");
       if (filters.include_inactive) await requireProfile(db,["admin"]);
       let query = db.from(kind).select("*, brand:brands!inner(*)", { count: "exact" });
       if (!filters.include_inactive) query = query.eq("is_active",true).eq("brand.is_active",true);
       if (filters.brand_id) query = query.eq("brand_id",filters.brand_id);
+      if (filters.segment) query = query.filter("segment","eq",filters.segment);
+      if (filters.material) query = query.eq("material",filters.material);
       if (filters.category) query = query.eq("brand.category",filters.category);
       if (filters.search) query = query.or(`sku.ilike.%${filters.search}%,name.ilike.%${filters.search}%`);
       if (filters.min_price !== undefined) query = query.gte("price",filters.min_price);
       if (filters.max_price !== undefined) query = query.lte("price",filters.max_price);
-      const result = await query.order("name").order("id").range(range.offset,range.offset+range.limit-1);
+      query = filters.sort === "price_asc" || filters.sort === "price_desc"
+        ? query.order("price",{ ascending: filters.sort === "price_asc" }).order("id")
+        : query.order("name").order("id");
+      const result = await query.range(range.offset,range.offset+range.limit-1);
       fail(result.error); return page(result.data,result.count,range);
     },
     async getProduct(kind: ProductKind, lookup: { id: string } | { sku: string }) {

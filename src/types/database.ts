@@ -6,6 +6,7 @@ export type BrandCategory = "lujo" | "deportivo" | "moda" | "accesible" | "infan
 export type FrameMaterial = "acetato" | "metal" | "titanio" | "tr90" | "mixto";
 export type FrameShape = "rectangular" | "redondo" | "aviador" | "cat-eye" | "cuadrado" | "ovalado";
 export type FrameGender = "unisex" | "hombre" | "mujer" | "infantil";
+export type FrameSegment = "oftalmico" | "solar";
 export type LensType = "monofocal" | "bifocal" | "progresivo";
 export type LensMaterial = "cr39" | "policarbonato" | "trivex" | "alto_indice" | "mineral";
 export type EyeSide = "OD" | "OI";
@@ -40,6 +41,7 @@ type FrameRow = Timestamps & {
   shape: FrameShape;
   gender: FrameGender;
   color: string;
+  segment: FrameSegment | null;
   lens_width_mm: number;
   bridge_width_mm: number;
   temple_length_mm: number;
@@ -51,8 +53,8 @@ type FrameRow = Timestamps & {
   image_url: string | null;
   is_active: boolean;
 };
-/** brand is an optional joined projection, never a database column. */
-export type Frame = FrameRow & { brand?: Brand };
+/** Legacy UI fixtures may omit segment; database Rows always include it. */
+export type Frame = Omit<FrameRow, "segment"> & { segment?: FrameSegment | null; brand?: Brand };
 export type Lens = Timestamps & {
   id: string;
   brand_id: string;
@@ -168,6 +170,7 @@ export type Database = {
       frame_material: FrameMaterial;
       frame_shape: FrameShape;
       frame_gender: FrameGender;
+      frame_segment: FrameSegment;
       lens_type: LensType;
       lens_material: LensMaterial;
       eye_side: EyeSide;
@@ -195,12 +198,16 @@ export type ClinicalExam = { record: ClinicalRecord; prescriptions: Prescription
 export type ClinicalHistory = { patient: Patient; records: (ClinicalRecord & { prescriptions: Prescription[] })[]; total: number; limit: number; offset: number };
 export type AppointmentInput = Pick<Appointment, "patient_id" | "optometrist_id" | "starts_at" | "ends_at"> & { reason?: string | null };
 export type RescheduleInput = Pick<Appointment, "starts_at" | "ends_at"> & { optometrist_id?: string };
+export type AppointmentStatusInput = { status: Exclude<AppointmentStatus, "scheduled"> };
 export type AvailableSlot = { starts_at: string; ends_at: string };
 export type OptometristSummary = Pick<UserProfile, "id" | "full_name">;
 export type Page<T> = { items: T[]; total: number; limit: number; offset: number };
 export type CatalogFilters = {
   brand_id?: string;
   category?: BrandCategory;
+  segment?: FrameSegment;
+  material?: FrameMaterial | LensMaterial;
+  sort?: "featured" | "price_asc" | "price_desc";
   search?: string;
   min_price?: number;
   max_price?: number;

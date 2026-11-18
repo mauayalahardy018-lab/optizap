@@ -64,6 +64,22 @@ test("catalog details use exact SKU and UUID filters", async () => {
   assert.equal(calls[0].url.searchParams.get("sku"),"eq.RB-TEST");
   assert.equal(calls[1].url.searchParams.get("id"),`eq.${id}`);
 });
+test("catalog filters frame segment and material and sorts by price",async () => {
+  const { db,calls } = fixture(null);
+  await createCatalogService(db).listProducts('frames',{segment:'solar',material:'acetato',sort:'price_desc'});
+  const query = calls[0].url.searchParams;
+  assert.equal(query.get('segment'),'eq.solar');
+  assert.equal(query.get('material'),'eq.acetato');
+  assert.equal(query.get('order'),'price.desc,id.asc');
+  await rejects(() => createCatalogService(db).listProducts('lenses',{segment:'solar'}),'VALIDATION_ERROR');
+  await rejects(() => createCatalogService(db).listProducts('frames',{material:'cr39'}),'VALIDATION_ERROR');
+});
+test("admins can classify frames and reject unknown segments",async () => {
+  const { db,calls } = fixture('admin',call => Response.json({id,...call.body}));
+  await createCatalogService(db).updateProduct('frames',id,{segment:'solar'});
+  assert.deepEqual(calls.at(-1)?.body,{segment:'solar'});
+  await rejects(() => createCatalogService(db).updateProduct('frames',id,{segment:'sports'}),'VALIDATION_ERROR');
+});
 test("catalog unseen detail returns NOT_FOUND", async () => {
   const { db } = fixture(null);
   await rejects(() => createCatalogService(db).getProduct("lenses",{id}),"NOT_FOUND");
@@ -148,6 +164,31 @@ test("cancellation updates only status",async () => {
   await createAppointmentService(db).cancelAppointment(id);
   assert.deepEqual(calls.at(-1)?.body,{status:"cancelled"});
 });
+test("staff confirm and complete appointments through conditional transitions",async () => {
+  for (const role of ['admin','vendedor','optometrista'] as const) {
+    const { db,calls } = fixture(role,call => Response.json({id,...call.body}));
+    const api = createAppointmentService(db);
+    await api.updateAppointmentStatus(id,{status:'confirmed'});
+    assert.equal(calls.at(-1)?.url.searchParams.get('status'),'in.(scheduled)');
+    assert.deepEqual(calls.at(-1)?.body,{status:'confirmed'});
+    await api.updateAppointmentStatus(id,{status:'completed'});
+    assert.equal(calls.at(-1)?.url.searchParams.get('status'),'in.(scheduled,confirmed)');
+    assert.deepEqual(calls.at(-1)?.body,{status:'completed'});
+  }
+});
+test("clients can only request cancellation through the status endpoint",async () => {
+  const { db,calls } = fixture('cliente',call => Response.json({id,...call.body}));
+  const api = createAppointmentService(db);
+  for (const status of ['confirmed','completed','no_show']) await rejects(() => api.updateAppointmentStatus(id,{status}),'FORBIDDEN');
+  await api.updateAppointmentStatus(id,{status:'cancelled'});
+  assert.deepEqual(calls.at(-1)?.body,{status:'cancelled'});
+  await rejects(() => api.updateAppointmentStatus(id,{status:'scheduled'}),'VALIDATION_ERROR');
+  await rejects(() => api.updateAppointmentStatus(id,{status:'cancelled',patient_id:otherId}),'VALIDATION_ERROR');
+});
+test("terminal or invisible appointments cannot be updated successfully",async () => {
+  const { db } = fixture('vendedor',() => Response.json(null));
+  await rejects(() => createAppointmentService(db).updateAppointmentStatus(id,{status:'completed'}),'NOT_FOUND');
+});
 test("an invisible cancellation cannot be reported as successful",async () => {
   const { db } = fixture("cliente",() => Response.json(null));
   await rejects(() => createAppointmentService(db).cancelAppointment(id),"NOT_FOUND");
@@ -183,6 +224,12 @@ test("clinical service sends record and both eyes through one atomic RPC",async 
   const writes = calls.filter(c => c.method === "POST");
   assert.equal(writes.length,1); assert.equal(writes[0].url.pathname,"/rest/v1/rpc/create_clinical_exam");
   assert.deepEqual(writes[0].body,{p_record:clinical.record,p_prescriptions:clinical.prescriptions});
+});
+test("clinical service preserves visual acuity and monocular distance per eye",async () => {
+  const { db,calls } = fixture('optometrista',() => Response.json({record:{id},prescriptions:[]}));
+  const eyes = [{eye:'OD',sphere:-1,pupillary_distance_mm:31.5,visual_acuity:'20/20'}, {eye:'OI',sphere:-2,pupillary_distance_mm:30.5,visual_acuity:'20/25'}];
+  await createPatientService(db).createClinicalExam({...clinical,prescriptions:eyes});
+  assert.deepEqual(calls.at(-1)?.body?.p_prescriptions,eyes);
 });
 test("clinical input rejects duplicate eyes, invalid sphere and missing axis",async () => {
   const { db } = fixture("optometrista"); const api = createPatientService(db);
@@ -274,6 +321,14 @@ test("HTTP maps a booking race to 409 SLOT_UNAVAILABLE",async () => {
   const { db } = fixture("cliente",() => Response.json({code:"23P01",message:"secret"},{status:409}));
   const result = await handleApi(request("appointments","POST",booking),async () => db);
   assert.equal(result.status,409); assert.equal((await result.json()).error.code,"SLOT_UNAVAILABLE");
+});
+test("HTTP status endpoint supports reception confirmation and rejects client completion",async () => {
+  const { db } = fixture('vendedor',call => Response.json({id,...call.body}));
+  const result = await handleApi(request(`appointments/${id}/status`,'PATCH',{status:'confirmed'}),async () => db);
+  assert.equal(result.status,200); assert.equal((await result.json()).data.status,'confirmed');
+  const client = fixture('cliente');
+  const forbidden = await handleApi(request(`appointments/${id}/status`,'PATCH',{status:'completed'}),async () => client.db);
+  assert.equal(forbidden.status,403);
 });
 test("HTTP anonymous role edits return 401 and duplicates are rejected",async () => {
   const { db } = fixture(null);

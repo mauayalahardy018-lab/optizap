@@ -67,6 +67,7 @@ export async function handleApi(request: Request, clientFactory: () => Promise<C
       else if (path.length === 1 && method === "POST") { data = await appointments.createAppointment(await body(request)); status = 201; }
       else if (path.length === 2 && method === "PATCH") data = await appointments.rescheduleAppointment(path[1],await body(request));
       else if (path.length === 2 && method === "DELETE") data = await appointments.cancelAppointment(path[1]);
+      else if (path.length === 3 && path[2] === "status" && method === "PATCH") data = await appointments.updateAppointmentStatus(path[1],await body(request));
       else throw new ServiceError("NOT_FOUND","Ruta no encontrada.",404);
     } else if (path.join("/") === "me/history" && method === "GET") data = await patients.getMyHistory(query);
     else if (path.join("/") === "me/profile" && method === "GET") {

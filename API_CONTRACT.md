@@ -4,6 +4,8 @@ Contrato compartido entre Backend (`feat/backend`) y Frontend (`feat/frontend`).
 Fuente de tipos: `src/types/database.ts`. Migración inicial:
 `supabase/migrations/20261117230647_optizap_initial_schema.sql`.
 Funciones de servicios: `supabase/migrations/20261117233231_service_rpcs.sql`.
+Integración Frontend (segmento óptico/solar): `supabase/migrations/20261118000151_frontend_integration.sql`.
+Rama de integración: `feat/integration`, creada desde `feat/backend` e integrada con `origin/feat/frontend`.
 
 ## 1. Estado e invariantes
 
@@ -15,7 +17,7 @@ Funciones de servicios: `supabase/migrations/20261117233231_service_rpcs.sql`.
 - Precios: `numeric(12,2)`, no negativos, moneda fija `MXN`. Precio de armazón por pieza; precio de mica por **una mica**, no por par. No usar cálculos monetarios del cliente para autorizar cobros.
 - Medidas en mm, graduaciones en dioptrías y eje en grados. Los campos opcionales sin default son `null` en las filas.
 - `Tables<T>`, `TablesInsert<T>` y `TablesUpdate<T>` describen el esquema, no otorgan permisos. No enviar objetos de vista completos como escrituras.
-- `Brand.frames_count` y `Frame.brand` son proyecciones opcionales; no son columnas y no aparecen en los tipos Row/Insert/Update de las tablas.
+- `Brand.frames_count` y `Frame.brand` son proyecciones opcionales; no son columnas y no aparecen en los tipos Row/Insert/Update de las tablas. La proyección `Frame` admite omitir `segment` para conservar los mocks existentes de Frontend; `Tables<'frames'>` y las respuestas reales siempre lo incluyen como `FrameSegment | null`.
 - Los helpers de autorización y triggers viven en `private`, fuera de los esquemas expuestos. La autorización consulta el rol actual en `profiles`, nunca roles de `user_metadata`.
 
 ## 2. Tablas: entradas y salidas
@@ -45,7 +47,8 @@ En las entradas siguientes, UUID y timestamps se generan salvo cuando se indique
 ### frames → Frame
 
 - Entrada requerida: `{ brand_id, sku, name, material, shape, color, lens_width_mm, bridge_width_mm, temple_length_mm, price }`.
-- Opcionales: `gender` (unisex), `lens_height_mm` (null), `stock` (0), `image_url` (null), `is_active` (true), `currency` (MXN).
+- Opcionales: `gender` (unisex), `segment` (null), `lens_height_mm` (null), `stock` (0), `image_url` (null), `is_active` (true), `currency` (MXN).
+- `segment`: `oftalmico | solar | null`. Null significa pendiente de clasificar. La tercera migración conserva null en filas previas; no adivina cuáles son solares. Admin puede asignar o limpiar el segmento por POST/PATCH del catálogo. El filtro por segmento solo incluye productos ya clasificados.
 - `material`: `acetato | metal | titanio | tr90 | mixto`.
 - `shape`: `rectangular | redondo | aviador | cat-eye | cuadrado | ovalado`.
 - `gender`: `unisex | hombre | mujer | infantil`.
@@ -230,12 +233,14 @@ Ejemplo: `GET /api/catalog/frames?category=lujo&search=Ray-Ban&min_price=1000&ma
 | createAppointment(input) | POST /api/appointments | AppointmentInput: patient_id, optometrist_id, starts_at, ends_at, reason? | Appointment |
 | rescheduleAppointment(id, input) | PATCH /api/appointments/:id | RescheduleInput: starts_at, ends_at; optometrist_id opcional | Appointment |
 | cancelAppointment(id) | DELETE /api/appointments/:id | Sin body | Appointment con status=cancelled |
+| updateAppointmentStatus(id, input) | PATCH /api/appointments/:id/status | AppointmentStatusInput: { status: confirmed/completed/cancelled/no_show } | Appointment |
 
 - Todos requieren sesión. `from`/`to` filtran el inicio en intervalo [from,to); fechas ISO con zona, no fechas sin offset.
 - Disponibilidad: sugerencias entre **09:00 y 18:00, todos los días**, zona `America/Mexico_City`, con inicios cada 15 minutos. Duración 15–240, múltiplo de 15. La fecha debe ser hoy o estar dentro de los próximos 90 días. No hay calendario de días festivos, descansos ni horario individual en este esquema. Esta ventana limita las sugerencias; la creación de citas conserva las reglas de la sección 2, sin imponer esa ventana como horario del negocio.
 - La consulta SQL excluye toda ocupación del optometrista, incluso citas invisibles por RLS para el cliente, y devuelve únicamente `starts_at, ends_at`. No comprueba conflictos del paciente específico ni aparta horarios; el INSERT/UPDATE verifica ambos traslapes mediante EXCLUDE. La propia cita aparece ocupada al consultar disponibilidad para reprogramarla.
 - Reprogramar requiere Admin, Recepción u optometrista asignado; solo sobre scheduled/confirmed. Clientes cancelan y solicitan al personal la reprogramación. Las restricciones SQL validan propiedad y asignación.
 - Cancelar solo actualiza scheduled/confirmed; un cliente además solo puede cancelar las propias futuras. Una fila inexistente, invisible o que ya no admite esa operación devuelve 404, nunca éxito vacío. Las restricciones por rol pueden producir 403.
+- Confirmar permite scheduled → confirmed. Completar, cancelar o marcar no_show permite scheduled/confirmed → completed/cancelled/no_show. El servicio filtra el estado anterior en el mismo UPDATE para evitar transiciones concurrentes sobre estados finales; no permite reabrir completed, cancelled o no_show. Confirmación, completado y no_show requieren Admin, vendedor/Recepción u optometrista asignado según RLS. El cliente únicamente puede solicitar cancelled, conservando las validaciones de propiedad y fecha de la base. El endpoint de estados solo acepta status, no cambios de horario ni identidad. Estas transiciones son reglas de los servicios; las RLS existentes siguen controlando el acceso directo a las tablas.
 - Si otra solicitud ocupa el horario entre consulta y escritura, la base devuelve `23P01`; el endpoint responde HTTP 409, código `SLOT_UNAVAILABLE`, mensaje: “El horario ya está ocupado para el paciente o el optometrista. Elige otro horario.”
 
 ### Pacientes y expediente clínico
@@ -260,8 +265,8 @@ Ejemplo de cuerpo para registrar ambos ojos:
 {
   "record": { "patient_id": "<UUID paciente>", "optometrist_id": "<UUID optometrista>", "notes": "Seguimiento" },
   "prescriptions": [
-    { "eye": "OD", "sphere": -1.25, "cylinder": -0.5, "axis": 90, "addition": 0, "pupillary_distance_mm": 31 },
-    { "eye": "OI", "sphere": -1, "cylinder": 0, "addition": 0, "pupillary_distance_mm": 31 }
+    { "eye": "OD", "sphere": -1.25, "cylinder": -0.5, "axis": 90, "addition": 0, "pupillary_distance_mm": 31.5, "visual_acuity": "20/20" },
+    { "eye": "OI", "sphere": -1, "cylinder": 0, "addition": 0, "pupillary_distance_mm": 30.5, "visual_acuity": "20/25" }
   ]
 }
 ```
@@ -286,6 +291,34 @@ Listar perfiles y cambiar roles requiere Admin. Solo se acepta role, con valor a
 
 EXECUTE restringido a authenticated; anon no puede llamarlas. Las dos primeras delegan en helpers SECURITY DEFINER del esquema private con comprobación de identidad/perfil y salida mínima. create_clinical_exam usa los permisos del usuario y mantiene las RLS existentes. No cambia ninguna tabla ni amplía sus políticas de lectura.
 
+## 7. Conexión de las vistas de feat/frontend
+
+La UI integrada conserva por ahora sus mocks y el RoleProvider de demostración. Esta rama entrega los contratos y servicios para sustituirlos; la selección visual de un rol no cambia la autorización real. Las llamadas deben usar la sesión SSR y esperar la respuesta antes de mostrar éxito.
+
+| Necesidad de la UI | Conexión real |
+| --- | --- |
+| Catálogo, marcas y detalle | GET /api/brands, GET /api/catalog/frames, GET /api/catalog/lenses; detalle por UUID/SKU |
+| Categoría armazones_oftalmicos | /api/catalog/frames?segment=oftalmico |
+| Categoría lentes_sol | /api/catalog/frames?segment=solar |
+| Categoría micas_tratamientos | /api/catalog/lenses |
+| Todo el catálogo | Consultar ambos kinds; cada respuesta está paginada por separado |
+| Filtro por marca elegida por slug | Resolver su id desde /api/brands y enviar brand_id |
+| Material y precio | material=enum correspondiente al kind; sort=featured/price_asc/price_desc; min_price/max_price opcionales |
+| Citas: usuarios y pacientes para los selectores | /api/optometrists devuelve id/full_name; personal usa /api/patients; cliente obtiene su patient.id de /api/me/history |
+| Citas: listado, alta y reprogramación | GET/POST /api/appointments; PATCH /api/appointments/:id; usar starts_at/ends_at de disponibilidad |
+| updateAppointmentStatus(id, status) del provider | PATCH /api/appointments/:id/status con { status }; DELETE /api/appointments/:id también cancela |
+| addClinicalConsultation(input) del provider | POST /api/clinical-exams con { record: campos clínicos + patient_id + optometrist_id, prescriptions: [{ eye: 'OD', ...input.od }, { eye: 'OI', ...input.oi }] } |
+| Agudeza visual y DIP monocular | visual_acuity es texto por ojo (p. ej. 20/20); pupillary_distance_mm es número monocular 20–45 mm, no la suma binocular |
+| Historial del personal y cliente | GET /api/patients/:id/history para Admin/Optometrista; GET /api/me/history para el cliente; no habilitar expediente clínico para vendedor |
+| /dashboard/usuarios | GET /api/users y PATCH /api/users/:id/role con { role }; únicamente sesión Admin |
+| updateUserRole(userId, role) del provider | Adaptar al PATCH anterior y reemplazar el perfil con data de la respuesta; método de servicio equivalente updateRole(userId, { role }) |
+
+Los IDs de demostración con prefijos como u100… o p100… no son UUID válidos y no se envían a estos endpoints; usar los IDs devueltos por Auth y las tablas. Los roles reales permanecen admin/optometrista/vendedor/cliente. Los valores UI de categorías de producto no se envían en category: ese filtro sigue siendo la categoría de marca (lujo/deportivo/moda/accesible/infantil).
+
+Los filtros adicionales aceptados por listProducts son segment (solo frames), material (validado contra el enum de cada kind) y sort (featured = orden estable name/id; price_asc o price_desc = price/id). No enviar segment a lenses. Una categoría sin resultados puede indicar que falta clasificar los armazones existentes; no se genera clasificación automática a partir de nombres/SKU.
+
+Para la conexión real deben estar aplicadas las **tres migraciones** y configurado Supabase SSR. La integración de GitHub no despliega la base remota ni convierte el selector de rol de demostración en login. Las pruebas verifican los campos OD/OI y los permisos reales independientemente del estado de los mocks.
+
 ## Pendientes para Backend
 
 - [x] Consultas de catálogo: getBrands/getBrandBySlug y listProducts('frames', filtros), expuestas también por Route Handlers. No se exporta una Server Action llamada getFrames.
@@ -293,5 +326,7 @@ EXECUTE restringido a authenticated; anon no puede llamarlas. Las dos primeras d
 - [x] Definir políticas RLS según admin, optometrista, vendedor y cliente (incluidas en migración; pendientes de despliegue).
 - [x] Directorio de optometristas con campos mínimos y horarios disponibles; aplicar la segunda migración para habilitar las RPC.
 - [ ] Integración y pruebas contra Supabase Auth/Data API una vez aprobado el proyecto de destino.
-- [ ] (Solicitud Frontend) Considerar campo o etiqueta en `frames` (p. ej. `segment: 'oftalmico' | 'solar'` o booleano `is_sunglasses`) para distinguir en BD entre "Armazones oftálmicos" y "Lentes de sol" dentro del filtro de categorías del catálogo.
-- [ ] (Solicitud Frontend) Server Action o endpoint para listar `profiles` y ejecutar cambio de rol (`updateUserRole(userId, role)`) desde `/dashboard/usuarios` con sesión `admin`.
+- [x] (Solicitud Frontend) Campo frames.segment: oftalmico/solar/null y filtro segment del catálogo; tercera migración, tipos reales y proyección compatible con mocks. Mapeo de categorías documentado en sección 7.
+- [x] (Solicitud Frontend) GET /api/users y PATCH /api/users/:id/role para listar profiles y cambiar roles desde /dashboard/usuarios con sesión Admin. Adaptación de updateUserRole documentada en sección 7.
+- [x] Estados de citas scheduled/confirmed/completed/cancelled: alta scheduled, endpoint de confirmación/completado/cancelación, permisos vendedor/Recepción y transiciones documentadas. Se conserva no_show del esquema existente.
+- [x] Expediente OD/OI con visual_acuity y pupillary_distance_mm monocular: entradas/salidas documentadas y roundtrip verificado en servicios y PostgreSQL.

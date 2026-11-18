@@ -151,6 +151,13 @@ test('Optizap migrations, constraints and RLS', async t => {
     assert.equal(await count('brands'), 8);
   }));
   await t.test('administrator can insert catalog', () => as('authenticated', admin, () => insert('frames', { ...frame, sku: 'ADMIN-FRAME' })));
+  await t.test('frame segment stays unclassified until assigned and filters solar correctly', () => as('authenticated', admin, async () => {
+    assert.equal((await rows("select segment from public.frames where sku='TEST-FRAME'"))[0].segment,null);
+    await insert('frames',{...frame,sku:'SOLAR-FRAME',segment:'solar'});
+    assert.deepEqual((await rows("select sku from public.frames where segment='solar'")).map(r => r.sku),['SOLAR-FRAME']);
+    await db.exec("update public.frames set segment='oftalmico' where sku='SOLAR-FRAME'");
+    assert.equal((await rows("select segment from public.frames where sku='SOLAR-FRAME'"))[0].segment,'oftalmico');
+  }));
   for (const user of [client, reception, opto]) {
     await t.test(`non-admin ${user} cannot write catalog`, () => denied(() => as('authenticated', user, () => insert('frames', { ...frame, sku: 'FORBIDDEN' }))));
   }
@@ -197,6 +204,13 @@ test('Optizap migrations, constraints and RLS', async t => {
   }));
   await t.test('unassigned optometrist cannot read the appointment', () => as('authenticated', opto2, async () => assert.equal(await count('appointments'), 0)));
   await t.test('reception can confirm an appointment', () => as('authenticated', reception, () => db.exec(`update public.appointments set status='confirmed' where id='${appointment}'`)));
+  await t.test('reception can complete appointments and clients cannot complete their own', async () => {
+    await as('authenticated',reception,async () => {
+      const result = await rows(`update public.appointments set status='completed' where id='${appointment}' and status in ('scheduled','confirmed') returning status`);
+      assert.equal(result[0].status,'completed');
+    });
+    await denied(() => as('authenticated',client,() => db.exec(`update public.appointments set status='completed' where id='${appointment}'`)));
+  });
   await t.test('overlapping clinician bookings are rejected', () => denied(() => as('authenticated', reception, () => insert('appointments', { ...booking, patient_id: patient2, starts_at: '2099-01-01T10:15Z', ends_at: '2099-01-01T10:45Z' })), '23P01'));
   await t.test('overlapping patient bookings with different clinicians are rejected', () => denied(() => as('authenticated', reception, () => insert('appointments', { ...booking, optometrist_id: opto2, starts_at: '2099-01-01T10:15Z', ends_at: '2099-01-01T10:45Z' })), '23P01'));
   await t.test('a conflicting reschedule fails and preserves the original slot', () => as('authenticated', reception, async () => {
@@ -255,10 +269,11 @@ test('Optizap migrations, constraints and RLS', async t => {
   const clinicalPayload = { patient_id: patient, optometrist_id: opto, notes: 'Atomic exam' };
   await t.test('clinical RPC creates both eyes with the record in one transaction', () => as('authenticated', opto, async () => {
     const before = await count('clinical_records');
-    const result = await db.query('select public.create_clinical_exam($1,$2) as exam',[clinicalPayload,[{ eye: 'OD',sphere: -1 },{ eye: 'OI',sphere: -2 }]]);
+    const result = await db.query('select public.create_clinical_exam($1,$2) as exam',[clinicalPayload,[{ eye: 'OD',sphere: -1,pupillary_distance_mm:31.5,visual_acuity:'20/20' },{ eye: 'OI',sphere: -2,pupillary_distance_mm:30.5,visual_acuity:'20/25' }]]);
     assert.equal(await count('clinical_records'),before+1);
     assert.equal(result.rows[0].exam.prescriptions.length,2);
     assert.ok(result.rows[0].exam.prescriptions.every(p => p.clinical_record_id === result.rows[0].exam.record.id));
+    assert.deepEqual(result.rows[0].exam.prescriptions.map(p => [p.eye,p.pupillary_distance_mm,p.visual_acuity]),[['OD',31.5,'20/20'],['OI',30.5,'20/25']]);
   }));
   await t.test('invalid second eye rolls back examination and first eye', () => as('authenticated', opto, async () => {
     const before = await count('clinical_records'), eyes = await count('prescriptions');

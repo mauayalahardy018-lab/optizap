@@ -1,5 +1,5 @@
-import type { AppointmentInput, RescheduleInput } from "../types/database";
-import { checkInterval, date, fail, found, instant, invalid, nullable, number, page, pagination, parse, requireProfile, text, uuid, type Client } from "./core";
+import type { AppointmentInput, AppointmentStatusInput, RescheduleInput } from "../types/database";
+import { checkInterval, choice, date, fail, found, instant, invalid, nullable, number, page, pagination, parse, requireProfile, text, uuid, type Client } from "./core";
 
 export function createAppointmentService(db: Client) {
   return {
@@ -50,6 +50,16 @@ export function createAppointmentService(db: Client) {
     async cancelAppointment(id: string) {
       uuid(id,"id"); await requireProfile(db);
       const result = await db.from("appointments").update({ status: "cancelled" }).eq("id",id).in("status",["scheduled","confirmed"]).select("*").maybeSingle();
+      fail(result.error); return found(result.data);
+    },
+    async updateAppointmentStatus(id: string, input: unknown) {
+      uuid(id,"id");
+      const payload = parse<AppointmentStatusInput>(input,{ status: choice(["confirmed","completed","cancelled","no_show"]) },["status"]);
+      // Client cancellation keeps the existing future/ownership checks in RLS.
+      await requireProfile(db,payload.status === "cancelled" ? undefined : ["admin","vendedor","optometrista"]);
+      const previous = payload.status === "confirmed" ? ["scheduled"] as const : ["scheduled","confirmed"] as const;
+      // Filtering old status makes transitions atomic even under concurrent clicks.
+      const result = await db.from("appointments").update(payload).eq("id",id).in("status",previous).select("*").maybeSingle();
       fail(result.error); return found(result.data);
     },
   };
