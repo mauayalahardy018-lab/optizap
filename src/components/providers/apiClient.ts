@@ -5,6 +5,11 @@ import type {
   Appointment,
   AppointmentInput,
   AppointmentStatus,
+  AuthLoginInput,
+  AuthLoginResult,
+  AuthLogoutResult,
+  AuthRegisterInput,
+  AuthRegisterResult,
   AvailableSlot,
   Brand,
   CatalogFilters,
@@ -35,15 +40,28 @@ export class FrontendApiError extends Error {
   }
 }
 
-export function getBrowserSupabaseClient() {
+export function isSupabaseConfigured(): boolean {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key =
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-  if (!url || !key || url.includes("tu-proyecto.supabase.co")) {
+  return Boolean(
+    url &&
+      key &&
+      !url.includes("tu-proyecto.supabase.co") &&
+      !url.includes("<PROJECT_REF>")
+  );
+}
+
+export function getBrowserSupabaseClient() {
+  if (!isSupabaseConfigured()) {
     return null;
   }
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const key = (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!;
 
   return createBrowserClient<Database>(url, key);
 }
@@ -87,6 +105,32 @@ function buildQuery(params?: Record<string, string | number | boolean | undefine
   }
   const qs = sp.toString();
   return qs ? `?${qs}` : "";
+}
+
+// 0. Autenticación SSR
+export async function loginApi(
+  input: AuthLoginInput
+): Promise<AuthLoginResult> {
+  return requestJson<AuthLoginResult>("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function registerApi(
+  input: AuthRegisterInput
+): Promise<AuthRegisterResult> {
+  return requestJson<AuthRegisterResult>("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function logoutApi(): Promise<AuthLogoutResult> {
+  return requestJson<AuthLogoutResult>("/api/auth/logout", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 // 1. Perfil y Usuarios

@@ -10,6 +10,8 @@ import React, {
 import type {
   Appointment,
   AppointmentStatus,
+  AuthRegisterInput,
+  AuthRegisterResult,
   ClinicalRecord,
   OptometristSummary,
   Patient,
@@ -36,6 +38,10 @@ import {
   fetchPatientsApi,
   fetchUsersApi,
   getBrowserSupabaseClient,
+  isSupabaseConfigured,
+  loginApi,
+  logoutApi,
+  registerApi,
   updateAppointmentStatusApi,
   updateUserRoleApi,
 } from "./apiClient";
@@ -78,9 +84,13 @@ interface RoleContextValue {
   currentUser: UserProfile;
   activeRole: UserRole;
   isDemoMode: boolean;
+  isSupabaseConfigured: boolean;
   isLoadingSession: boolean;
   setActiveRole: (role: UserRole) => void;
   signInWithPassword: (email: string, password: string) => Promise<void>;
+  registerWithPassword: (
+    input: AuthRegisterInput
+  ) => Promise<AuthRegisterResult>;
   signOut: () => Promise<void>;
   refreshSession: () => Promise<void>;
   users: UserProfile[];
@@ -147,6 +157,7 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
   );
 
   const isDemoMode = sessionProfile === null;
+  const supabaseConfigured = isSupabaseConfigured();
 
   const currentUser: UserProfile =
     sessionProfile ??
@@ -253,30 +264,31 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signInWithPassword = async (email: string, password: string) => {
-    const supabase = getBrowserSupabaseClient();
-    if (!supabase) {
-      throw new FrontendApiError(
-        "UNAVAILABLE",
-        "Supabase Auth no está configurado en las variables de entorno (.env). Usa el selector de Modo Demo.",
-        503
-      );
-    }
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-    if (error) {
-      throw new FrontendApiError("UNAUTHENTICATED", error.message, 401);
-    }
+    await loginApi({ email, password });
     await refreshSession();
   };
 
-  const signOut = async () => {
-    const supabase = getBrowserSupabaseClient();
-    if (supabase) {
-      await supabase.auth.signOut();
+  const registerWithPassword = async (
+    input: AuthRegisterInput
+  ): Promise<AuthRegisterResult> => {
+    const result = await registerApi(input);
+    if (!result.requires_email_confirmation) {
+      await refreshSession();
     }
-    setSessionProfile(null);
+    return result;
+  };
+
+  const signOut = async () => {
+    try {
+      await logoutApi();
+    } catch {
+      const supabase = getBrowserSupabaseClient();
+      if (supabase) {
+        await supabase.auth.signOut().catch(() => {});
+      }
+    } finally {
+      setSessionProfile(null);
+    }
   };
 
   const loadPatientHistory = useCallback(
@@ -617,9 +629,11 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
         currentUser,
         activeRole,
         isDemoMode,
+        isSupabaseConfigured: supabaseConfigured,
         isLoadingSession,
         setActiveRole,
         signInWithPassword,
+        registerWithPassword,
         signOut,
         refreshSession,
         users,
