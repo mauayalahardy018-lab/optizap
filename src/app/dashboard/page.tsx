@@ -4,6 +4,7 @@ import React from "react";
 import Link from "next/link";
 import {
   ArrowRight,
+  Briefcase,
   Calendar,
   Eye,
   FileText,
@@ -25,10 +26,12 @@ export default function DashboardPage() {
     currentUser,
     activeRole,
     users,
+    optometrists,
     appointments,
     clinicalRecords,
     prescriptions,
     patients,
+    myPatient,
   } = useRole();
 
   const totalInventoryUnits = MOCK_CATALOG_ITEMS.reduce(
@@ -37,19 +40,24 @@ export default function DashboardPage() {
     0
   );
 
+  const clientPatientId =
+    myPatient?.id ??
+    patients.find((p) => p.profile_id === currentUser.id)?.id ??
+    "20000000-0000-4000-8000-000000000001";
+
   const visibleAppointments =
     activeRole === "cliente"
-      ? appointments.filter((a) => a.patient_id === "p1000000-0000-4000-8000-000000000001")
+      ? appointments.filter((a) => a.patient_id === clientPatientId)
       : activeRole === "optometrista"
         ? appointments.filter((a) => a.optometrist_id === currentUser.id)
         : appointments;
 
   const visibleRecords =
     activeRole === "cliente"
-      ? clinicalRecords.filter(
-          (r) => r.patient_id === "p1000000-0000-4000-8000-000000000001"
-        )
-      : clinicalRecords;
+      ? clinicalRecords.filter((r) => r.patient_id === clientPatientId)
+      : activeRole === "vendedor"
+        ? []
+        : clinicalRecords;
 
   return (
     <main className="mx-auto max-w-7xl space-y-8 px-4 py-8 sm:px-6 lg:px-8">
@@ -61,9 +69,12 @@ export default function DashboardPage() {
             {activeRole === "optometrista" && (
               <Stethoscope className="h-3.5 w-3.5" />
             )}
+            {activeRole === "vendedor" && (
+              <Briefcase className="h-3.5 w-3.5" />
+            )}
             {activeRole === "cliente" && <Eye className="h-3.5 w-3.5" />}
             <span className="uppercase tracking-wider">
-              Panel {activeRole}
+              Panel {activeRole === "vendedor" ? "Recepción / Ventas" : activeRole}
             </span>
           </div>
           <h1 className="text-2xl font-bold sm:text-3xl">
@@ -74,6 +85,8 @@ export default function DashboardPage() {
               "Supervisión global de sucursales, inventario óptico, agenda clínica y permisos de usuarios."}
             {activeRole === "optometrista" &&
               "Panel clínico de consultas optométricas, refracción OD/OI y seguimiento de pacientes asignados."}
+            {activeRole === "vendedor" &&
+              "Recepción y ventas: programación de citas, confirmación de asistencia y registro de pacientes."}
             {activeRole === "cliente" &&
               "Consulta tu expediente visual, graduación actualizada y próximas citas de prueba en sucursal."}
           </p>
@@ -129,13 +142,16 @@ export default function DashboardPage() {
             <FileText className="h-5 w-5 text-teal-600" />
           </div>
           <p className="mt-3 text-3xl font-bold text-slate-900">
-            {visibleRecords.length}
+            {activeRole === "vendedor" ? "Restringido" : visibleRecords.length}
           </p>
           <Link
             href="/historial"
             className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:underline"
           >
-            Ver graduaciones OD/OI <ArrowRight className="h-3 w-3" />
+            {activeRole === "vendedor"
+              ? "Ver política RLS"
+              : "Ver graduaciones OD/OI"}{" "}
+            <ArrowRight className="h-3 w-3" />
           </Link>
         </div>
 
@@ -202,7 +218,9 @@ export default function DashboardPage() {
           <div className="mt-4 space-y-3">
             {visibleAppointments.map((apt) => {
               const patient = patients.find((p) => p.id === apt.patient_id);
-              const optometrist = users.find((u) => u.id === apt.optometrist_id);
+              const optometrist = optometrists.find(
+                (u) => u.id === apt.optometrist_id
+              );
               const dateObj = new Date(apt.starts_at);
               const formattedDate = dateObj.toLocaleDateString("es-MX", {
                 day: "2-digit",
@@ -246,7 +264,7 @@ export default function DashboardPage() {
                     <div className="font-mono text-xs font-bold text-slate-900">
                       {formattedDate}
                     </div>
-                    <div className="text-xs text-sky-700 font-semibold">
+                    <div className="text-xs font-semibold text-sky-700">
                       {formattedTime} hrs
                     </div>
                   </div>
@@ -296,7 +314,7 @@ export default function DashboardPage() {
                 ))}
               </div>
             </div>
-          ) : (
+          ) : activeRole !== "vendedor" ? (
             <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <div className="flex items-center justify-between border-b border-slate-100 pb-4">
                 <div>
@@ -330,7 +348,9 @@ export default function DashboardPage() {
                       </span>
                     </div>
                     <div className="mt-2 space-y-1 font-mono text-xs text-slate-700">
-                      <div>Esfera: {rx.sphere > 0 ? `+${rx.sphere}` : rx.sphere}</div>
+                      <div>
+                        Esfera: {rx.sphere > 0 ? `+${rx.sphere}` : rx.sphere}
+                      </div>
                       <div>Cilindro: {rx.cylinder}</div>
                       <div>Eje: {rx.axis ?? 0}°</div>
                       <div>DIP: {rx.pupillary_distance_mm} mm</div>
@@ -339,7 +359,7 @@ export default function DashboardPage() {
                 ))}
               </div>
             </div>
-          )}
+          ) : null}
 
           {/* Marcas top en inventario */}
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">

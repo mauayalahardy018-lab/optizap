@@ -3,6 +3,7 @@
 import React, { useMemo, useState } from "react";
 import Link from "next/link";
 import {
+  AlertCircle,
   AlertTriangle,
   ArrowLeft,
   CheckCircle2,
@@ -48,6 +49,8 @@ export default function UsuariosAdminPage() {
     useRole();
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState<"all" | UserRole>("all");
+  const [updatingUserId, setUpdatingUserId] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lastUpdatedInfo, setLastUpdatedInfo] = useState<{
     name: string;
     newRole: UserRole;
@@ -67,13 +70,30 @@ export default function UsuariosAdminPage() {
     });
   }, [users, search, roleFilter]);
 
-  const handleRoleChange = (
+  const handleRoleChange = async (
     userId: string,
     name: string,
     newRole: UserRole
   ) => {
-    updateUserRole(userId, newRole);
-    setLastUpdatedInfo({ userId, name, newRole });
+    setErrorMessage(null);
+    setLastUpdatedInfo(null);
+    setUpdatingUserId(userId);
+    try {
+      const updated = await updateUserRole(userId, newRole);
+      setLastUpdatedInfo({
+        userId: updated.id,
+        name: updated.full_name ?? name,
+        newRole: updated.role,
+      });
+    } catch (err) {
+      setErrorMessage(
+        err instanceof Error
+          ? err.message
+          : "No fue posible actualizar el rol del usuario."
+      );
+    } finally {
+      setUpdatingUserId(null);
+    }
   };
 
   if (activeRole !== "admin") {
@@ -87,13 +107,13 @@ export default function UsuariosAdminPage() {
             <div>
               <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-800 ring-1 ring-amber-600/20">
                 <AlertTriangle className="h-3.5 w-3.5" />
-                Política RLS Supabase (Código 42501)
+                Política RLS Supabase (Código 42501 / FORBIDDEN 403)
               </span>
               <h1 className="mt-1.5 text-2xl font-bold text-slate-900">
                 Vista restringida a Administradores
               </h1>
               <p className="mt-1 text-sm text-slate-600">
-                Actualmente estás simulando la sesión como{" "}
+                Actualmente estás con el rol{" "}
                 <strong className="font-semibold text-slate-900">
                   {currentUser.full_name} ({activeRole})
                 </strong>
@@ -102,9 +122,8 @@ export default function UsuariosAdminPage() {
                   API_CONTRACT.md
                 </code>
                 , solo el rol <code className="font-mono font-bold">admin</code>{" "}
-                puede listar todos los perfiles y ejecutar{" "}
-                <code className="font-mono">PATCH /profiles</code> para asignar
-                roles.
+                puede consultar <code>GET /api/users</code> y ejecutar{" "}
+                <code className="font-mono">PATCH /api/users/:id/role</code>.
               </p>
             </div>
           </div>
@@ -147,25 +166,25 @@ export default function UsuariosAdminPage() {
             <span className="text-slate-300">/</span>
             <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-semibold text-indigo-700 ring-1 ring-indigo-600/20">
               <ShieldCheck className="h-3.5 w-3.5" />
-              Administración de Perfiles (RLS Admin)
+              Administración de Perfiles (GET /api/users)
             </span>
           </div>
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">
             Gestión de Roles y Usuarios Registrados
           </h1>
           <p className="mt-1 text-sm text-slate-600">
-            Administra los permisos del personal clínico y pacientes registrados
-            en <code>public.profiles</code>.
+            Administra los permisos del personal clínico, recepción y pacientes
+            registrados en <code>public.profiles</code>.
           </p>
         </div>
 
         <div className="rounded-xl bg-slate-900 px-4 py-3 text-xs text-slate-300">
           <div className="font-mono text-[11px] text-sky-400">
-            PATCH /rest/v1/profiles?id=eq.&lt;uuid&gt;
+            PATCH /api/users/:id/role
           </div>
           <div className="mt-0.5 text-slate-400">
-            Sincronizado con <code>UserProfile</code> en{" "}
-            <code>database.ts</code>
+            Roles: <code>admin</code>, <code>optometrista</code>,{" "}
+            <code>vendedor</code>, <code>cliente</code>
           </div>
         </div>
       </div>
@@ -220,20 +239,31 @@ export default function UsuariosAdminPage() {
         <div className="rounded-2xl border border-sky-100 bg-sky-50/40 p-4 shadow-sm">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase tracking-wider text-sky-700">
-              Clientes / Pacientes
+              Clientes y Recepción
             </span>
             <User className="h-4 w-4 text-sky-600" />
           </div>
           <p className="mt-2 text-2xl font-bold text-sky-950">
-            {users.filter((u) => u.role === "cliente").length}
+            {
+              users.filter(
+                (u) => u.role === "cliente" || u.role === "vendedor"
+              ).length
+            }
           </p>
           <p className="mt-0.5 text-xs text-sky-700/80">
-            Expediente personal y citas
+            Pacientes y personal de sucursal
           </p>
         </div>
       </div>
 
-      {/* Notificación de actualización de rol */}
+      {/* Error o confirmación de actualización de rol */}
+      {errorMessage && (
+        <div className="flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-medium text-rose-900 sm:text-sm">
+          <AlertCircle className="h-5 w-5 shrink-0 text-rose-600" />
+          <span>{errorMessage}</span>
+        </div>
+      )}
+
       {lastUpdatedInfo && (
         <div className="flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-900 sm:text-sm">
           <div className="flex items-center gap-2.5">
@@ -244,7 +274,7 @@ export default function UsuariosAdminPage() {
                 {lastUpdatedInfo.newRole}
               </code>{" "}
               <span className="hidden text-emerald-700 sm:inline">
-                (PATCH /profiles?id=eq.{lastUpdatedInfo.userId.slice(0, 8)}…)
+                (PATCH /api/users/{lastUpdatedInfo.userId.slice(0, 8)}…/role)
               </span>
             </span>
           </div>
@@ -272,26 +302,26 @@ export default function UsuariosAdminPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
-          {(["all", "admin", "optometrista", "cliente", "vendedor"] as const).map(
-            (r) => (
-              <button
-                key={r}
-                type="button"
-                onClick={() => setRoleFilter(r)}
-                className={`rounded-xl px-3 py-1.5 text-xs font-semibold transition ${
-                  roleFilter === r
-                    ? "bg-slate-900 text-white"
-                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                }`}
-              >
-                {r === "all"
-                  ? "Todos los roles"
-                  : r === "vendedor"
-                    ? "Recepción (vendedor)"
-                    : ROLE_LABELS[r].label}
-              </button>
-            )
-          )}
+          {(
+            ["all", "admin", "optometrista", "vendedor", "cliente"] as const
+          ).map((r) => (
+            <button
+              key={r}
+              type="button"
+              onClick={() => setRoleFilter(r)}
+              className={`rounded-xl px-3 py-1.5 text-xs font-semibold transition ${
+                roleFilter === r
+                  ? "bg-slate-900 text-white"
+                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+              }`}
+            >
+              {r === "all"
+                ? "Todos los roles"
+                : r === "vendedor"
+                  ? "Recepción (vendedor)"
+                  : ROLE_LABELS[r].label}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -305,7 +335,9 @@ export default function UsuariosAdminPage() {
                 <th className="px-6 py-3.5">UUID Perfil</th>
                 <th className="px-6 py-3.5">Rol Actual</th>
                 <th className="px-6 py-3.5">Permisos RLS</th>
-                <th className="px-6 py-3.5">Cambiar Rol (Admin, Optometrista, Cliente)</th>
+                <th className="px-6 py-3.5">
+                  Cambiar Rol (Admin, Optometrista, Recepción, Cliente)
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
@@ -363,21 +395,22 @@ export default function UsuariosAdminPage() {
                         <select
                           aria-label={`Cambiar rol de ${user.full_name ?? user.email}`}
                           value={user.role}
+                          disabled={updatingUserId === user.id}
                           onChange={(e) =>
-                            handleRoleChange(
+                            void handleRoleChange(
                               user.id,
                               user.full_name ?? user.email,
                               e.target.value as UserRole
                             )
                           }
-                          className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 shadow-sm transition focus:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                          className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 shadow-sm transition focus:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50"
                         >
                           <option value="admin">Admin</option>
                           <option value="optometrista">Optometrista</option>
-                          <option value="cliente">Cliente</option>
                           <option value="vendedor">
                             Recepción / Ventas (vendedor)
                           </option>
+                          <option value="cliente">Cliente</option>
                         </select>
                       </div>
                     </td>

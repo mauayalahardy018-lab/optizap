@@ -1,11 +1,13 @@
 import type {
   Appointment,
   Brand,
+  CatalogProduct,
   ClinicalRecord,
   Frame,
   Lens,
   Patient,
   Prescription,
+  Tables,
   UserProfile,
 } from "@/types/database";
 
@@ -38,6 +40,66 @@ export interface CatalogLensItem {
 }
 
 export type CatalogItem = CatalogFrameItem | CatalogLensItem;
+
+const FRAME_MATERIAL_LABELS: Record<Frame["material"], string> = {
+  acetato: "Acetato Italiano",
+  metal: "Metal Ligero",
+  titanio: "Titanio Puro",
+  tr90: "O Matter (TR90)",
+  mixto: "Acetato / Metal (Mixto)",
+};
+
+const LENS_MATERIAL_LABELS: Record<Lens["material"], string> = {
+  cr39: "Polímero Óptico CR-39",
+  policarbonato: "Policarbonato Alta Resistencia",
+  trivex: "Trivex Ultraligero",
+  alto_indice: "Alto Índice Asférico",
+  mineral: "Cristal Mineral Templado",
+};
+
+export function catalogProductToItem(
+  product: CatalogProduct,
+  kind: "frames" | "lenses"
+): CatalogItem {
+  if (kind === "lenses" || "lens_type" in product) {
+    const lens = product as Lens & { brand: Brand };
+    return {
+      kind: "lens",
+      categoryKey: "micas_tratamientos",
+      categoryLabel: "Micas/Tratamientos",
+      materialDisplay: `${LENS_MATERIAL_LABELS[lens.material] ?? lens.material} ${lens.refractive_index.toFixed(2)}`,
+      accentHex: lens.lens_type === "progresivo" ? "#0369a1" : "#0d9488",
+      highlights:
+        lens.coatings.length > 0
+          ? lens.coatings
+          : [
+              `Diseño ${lens.lens_type}`,
+              `Índice ${lens.refractive_index.toFixed(2)}`,
+              `Diámetro Ø ${lens.diameter_mm} mm`,
+            ],
+      lens,
+      brand: lens.brand,
+    };
+  }
+
+  const frame = product as Tables<"frames"> & { brand: Brand };
+  const isSolar = frame.segment === "solar";
+  return {
+    kind: "frame",
+    categoryKey: isSolar ? "lentes_sol" : "armazones_oftalmicos",
+    categoryLabel: isSolar ? "Lentes de sol" : "Armazones oftálmicos",
+    materialDisplay: FRAME_MATERIAL_LABELS[frame.material] ?? frame.material,
+    accentHex: isSolar ? "#0284c7" : "#1e293b",
+    lensTintHex: isSolar ? "rgba(2, 132, 199, 0.30)" : undefined,
+    highlights: [
+      `Color: ${frame.color}`,
+      `Medidas: ${frame.lens_width_mm}-${frame.bridge_width_mm}-${frame.temple_length_mm} mm`,
+      isSolar ? "Protección solar UV400" : "Compatible con graduación oftálmica",
+    ],
+    frame,
+    brand: frame.brand,
+  };
+}
 
 export const MOCK_BRANDS: Brand[] = [
   {
@@ -141,6 +203,7 @@ export const MOCK_CATALOG_ITEMS: CatalogItem[] = [
       material: "mixto",
       shape: "cuadrado",
       gender: "unisex",
+      segment: "oftalmico",
       color: "Negro Brillante / Dorado",
       lens_width_mm: 51,
       bridge_width_mm: 21,
@@ -173,6 +236,7 @@ export const MOCK_CATALOG_ITEMS: CatalogItem[] = [
       material: "metal",
       shape: "aviador",
       gender: "unisex",
+      segment: "solar",
       color: "Oro Arista / Verde Polarizado",
       lens_width_mm: 58,
       bridge_width_mm: 14,
@@ -204,6 +268,7 @@ export const MOCK_CATALOG_ITEMS: CatalogItem[] = [
       material: "tr90",
       shape: "rectangular",
       gender: "hombre",
+      segment: "oftalmico",
       color: "Satin Black",
       lens_width_mm: 55,
       bridge_width_mm: 18,
@@ -236,6 +301,7 @@ export const MOCK_CATALOG_ITEMS: CatalogItem[] = [
       material: "tr90",
       shape: "cuadrado",
       gender: "unisex",
+      segment: "solar",
       color: "Matte Black / Prizm Sapphire",
       lens_width_mm: 57,
       bridge_width_mm: 18,
@@ -267,6 +333,7 @@ export const MOCK_CATALOG_ITEMS: CatalogItem[] = [
       material: "titanio",
       shape: "rectangular",
       gender: "hombre",
+      segment: "oftalmico",
       color: "Pewter Matte Titanium",
       lens_width_mm: 54,
       bridge_width_mm: 18,
@@ -298,6 +365,7 @@ export const MOCK_CATALOG_ITEMS: CatalogItem[] = [
       material: "acetato",
       shape: "redondo",
       gender: "unisex",
+      segment: "oftalmico",
       color: "Havana Carey Clásico",
       lens_width_mm: 52,
       bridge_width_mm: 19,
@@ -330,6 +398,7 @@ export const MOCK_CATALOG_ITEMS: CatalogItem[] = [
       material: "acetato",
       shape: "aviador",
       gender: "unisex",
+      segment: "solar",
       color: "Terra di Siena / Azul",
       lens_width_mm: 54,
       bridge_width_mm: 21,
@@ -361,6 +430,7 @@ export const MOCK_CATALOG_ITEMS: CatalogItem[] = [
       material: "acetato",
       shape: "redondo",
       gender: "unisex",
+      segment: "oftalmico",
       color: "Negro Piano / Dorado",
       lens_width_mm: 51,
       bridge_width_mm: 20,
@@ -393,6 +463,7 @@ export const MOCK_CATALOG_ITEMS: CatalogItem[] = [
       material: "acetato",
       shape: "cat-eye",
       gender: "mujer",
+      segment: "solar",
       color: "Dark Havana / Degradado Marrón",
       lens_width_mm: 52,
       bridge_width_mm: 18,
@@ -420,7 +491,7 @@ export const MOCK_CATALOG_ITEMS: CatalogItem[] = [
     ],
     brand: brandBySlug("essilor"),
     lens: {
-      id: "l1000000-0000-4000-8000-000000000001",
+      id: "e1000000-0000-4000-8000-000000000001",
       brand_id: brandBySlug("essilor").id,
       sku: "ESS-VX-PHYSIO-167",
       name: "Varilux Physio 3.0 + Crizal Sapphire HR",
@@ -451,7 +522,7 @@ export const MOCK_CATALOG_ITEMS: CatalogItem[] = [
     ],
     brand: brandBySlug("essilor"),
     lens: {
-      id: "l1000000-0000-4000-8000-000000000002",
+      id: "e1000000-0000-4000-8000-000000000002",
       brand_id: brandBySlug("essilor").id,
       sku: "ESS-EZ-TRANS-153",
       name: "Eyezen Start + Transitions Gen S",
@@ -482,7 +553,7 @@ export const MOCK_CATALOG_ITEMS: CatalogItem[] = [
     ],
     brand: brandBySlug("zeiss"),
     lens: {
-      id: "l1000000-0000-4000-8000-000000000003",
+      id: "e1000000-0000-4000-8000-000000000003",
       brand_id: brandBySlug("zeiss").id,
       sku: "ZSS-SL-MONO-160",
       name: "ZEISS SmartLife Digital Individual 1.60",
@@ -513,7 +584,7 @@ export const MOCK_CATALOG_ITEMS: CatalogItem[] = [
     ],
     brand: brandBySlug("zeiss"),
     lens: {
-      id: "l1000000-0000-4000-8000-000000000004",
+      id: "e1000000-0000-4000-8000-000000000004",
       brand_id: brandBySlug("zeiss").id,
       sku: "ZSS-DS-PROG-174",
       name: "ZEISS DriveSafe Progressive 1.74",
@@ -535,7 +606,7 @@ export const MOCK_CATALOG_ITEMS: CatalogItem[] = [
 
 export const INITIAL_USER_PROFILES: UserProfile[] = [
   {
-    id: "u1000000-0000-4000-8000-000000000001",
+    id: "10000000-0000-4000-8000-000000000001",
     email: "direccion@optizap.mx",
     full_name: "Dra. Valeria Montes de Oca",
     role: "admin",
@@ -544,7 +615,7 @@ export const INITIAL_USER_PROFILES: UserProfile[] = [
     updated_at: "2026-11-15T10:30:00-06:00",
   },
   {
-    id: "u1000000-0000-4000-8000-000000000002",
+    id: "10000000-0000-4000-8000-000000000002",
     email: "dr.salazar@optizap.mx",
     full_name: "Lic. Opt. Alejandro Salazar",
     role: "optometrista",
@@ -553,7 +624,7 @@ export const INITIAL_USER_PROFILES: UserProfile[] = [
     updated_at: "2026-11-14T16:20:00-06:00",
   },
   {
-    id: "u1000000-0000-4000-8000-000000000003",
+    id: "10000000-0000-4000-8000-000000000003",
     email: "mauricio.ayala@cliente.mx",
     full_name: "Mauricio Ayala Hardy",
     role: "cliente",
@@ -562,7 +633,7 @@ export const INITIAL_USER_PROFILES: UserProfile[] = [
     updated_at: "2026-11-16T18:00:00-06:00",
   },
   {
-    id: "u1000000-0000-4000-8000-000000000004",
+    id: "10000000-0000-4000-8000-000000000004",
     email: "dra.camila@optizap.mx",
     full_name: "Lic. Opt. Camila Villaseñor",
     role: "optometrista",
@@ -571,7 +642,7 @@ export const INITIAL_USER_PROFILES: UserProfile[] = [
     updated_at: "2026-11-12T12:00:00-06:00",
   },
   {
-    id: "u1000000-0000-4000-8000-000000000005",
+    id: "10000000-0000-4000-8000-000000000005",
     email: "recepcion.polanco@optizap.mx",
     full_name: "Sofía Herrera (Sucursal Polanco)",
     role: "vendedor",
@@ -580,7 +651,7 @@ export const INITIAL_USER_PROFILES: UserProfile[] = [
     updated_at: "2026-11-10T17:45:00-06:00",
   },
   {
-    id: "u1000000-0000-4000-8000-000000000006",
+    id: "10000000-0000-4000-8000-000000000006",
     email: "carlos.mendoza@correo.mx",
     full_name: "Carlos Mendoza Ruiz",
     role: "cliente",
@@ -589,7 +660,7 @@ export const INITIAL_USER_PROFILES: UserProfile[] = [
     updated_at: "2026-11-15T09:15:00-06:00",
   },
   {
-    id: "u1000000-0000-4000-8000-000000000007",
+    id: "10000000-0000-4000-8000-000000000007",
     email: "elena.garza@correo.mx",
     full_name: "Elena Garza Treviño",
     role: "cliente",
@@ -601,8 +672,8 @@ export const INITIAL_USER_PROFILES: UserProfile[] = [
 
 export const MOCK_PATIENTS: Patient[] = [
   {
-    id: "p1000000-0000-4000-8000-000000000001",
-    profile_id: "u1000000-0000-4000-8000-000000000003",
+    id: "20000000-0000-4000-8000-000000000001",
+    profile_id: "10000000-0000-4000-8000-000000000003",
     full_name: "Mauricio Ayala Hardy",
     birth_date: "1995-04-18",
     phone: "+52 55 4123 8890",
@@ -611,8 +682,8 @@ export const MOCK_PATIENTS: Patient[] = [
     updated_at: "2026-11-16T18:00:00-06:00",
   },
   {
-    id: "p1000000-0000-4000-8000-000000000002",
-    profile_id: "u1000000-0000-4000-8000-000000000006",
+    id: "20000000-0000-4000-8000-000000000002",
+    profile_id: "10000000-0000-4000-8000-000000000006",
     full_name: "Carlos Mendoza Ruiz",
     birth_date: "1978-09-22",
     phone: "+52 55 8932 1104",
@@ -621,8 +692,8 @@ export const MOCK_PATIENTS: Patient[] = [
     updated_at: "2026-11-15T09:15:00-06:00",
   },
   {
-    id: "p1000000-0000-4000-8000-000000000003",
-    profile_id: "u1000000-0000-4000-8000-000000000007",
+    id: "20000000-0000-4000-8000-000000000003",
+    profile_id: "10000000-0000-4000-8000-000000000007",
     full_name: "Elena Garza Treviño",
     birth_date: "1989-12-03",
     phone: "+52 81 1940 3321",
@@ -635,8 +706,8 @@ export const MOCK_PATIENTS: Patient[] = [
 export const INITIAL_CLINICAL_RECORDS: ClinicalRecord[] = [
   {
     id: "c1000000-0000-4000-8000-000000000001",
-    patient_id: "p1000000-0000-4000-8000-000000000001",
-    optometrist_id: "u1000000-0000-4000-8000-000000000002",
+    patient_id: "20000000-0000-4000-8000-000000000001",
+    optometrist_id: "10000000-0000-4000-8000-000000000002",
     examined_at: "2026-11-10T11:30:00-06:00",
     chief_complaint: "Fatiga visual tras 8 horas frente a monitores y ligero desenfoque nocturno al conducir.",
     medical_history: "Sin patologías sistémicas. Uso previo de lentes monofocales hace 2 años.",
@@ -648,8 +719,8 @@ export const INITIAL_CLINICAL_RECORDS: ClinicalRecord[] = [
   },
   {
     id: "c1000000-0000-4000-8000-000000000002",
-    patient_id: "p1000000-0000-4000-8000-000000000002",
-    optometrist_id: "u1000000-0000-4000-8000-000000000004",
+    patient_id: "20000000-0000-4000-8000-000000000002",
+    optometrist_id: "10000000-0000-4000-8000-000000000004",
     examined_at: "2026-11-14T16:00:00-06:00",
     chief_complaint: "Dificultad para enfocar lectura fina a 40 cm y cambio de armazón progresivo.",
     medical_history: "Hipertensión arterial controlada.",
@@ -663,7 +734,7 @@ export const INITIAL_CLINICAL_RECORDS: ClinicalRecord[] = [
 
 export const INITIAL_PRESCRIPTIONS: Prescription[] = [
   {
-    id: "rx100000-0000-4000-8000-000000000001",
+    id: "30000000-0000-4000-8000-000000000001",
     clinical_record_id: "c1000000-0000-4000-8000-000000000001",
     eye: "OD",
     sphere: -1.75,
@@ -676,7 +747,7 @@ export const INITIAL_PRESCRIPTIONS: Prescription[] = [
     updated_at: "2026-11-10T12:00:00-06:00",
   },
   {
-    id: "rx100000-0000-4000-8000-000000000002",
+    id: "30000000-0000-4000-8000-000000000002",
     clinical_record_id: "c1000000-0000-4000-8000-000000000001",
     eye: "OI",
     sphere: -1.5,
@@ -689,7 +760,7 @@ export const INITIAL_PRESCRIPTIONS: Prescription[] = [
     updated_at: "2026-11-10T12:00:00-06:00",
   },
   {
-    id: "rx100000-0000-4000-8000-000000000003",
+    id: "30000000-0000-4000-8000-000000000003",
     clinical_record_id: "c1000000-0000-4000-8000-000000000002",
     eye: "OD",
     sphere: 1.25,
@@ -702,7 +773,7 @@ export const INITIAL_PRESCRIPTIONS: Prescription[] = [
     updated_at: "2026-11-14T16:40:00-06:00",
   },
   {
-    id: "rx100000-0000-4000-8000-000000000004",
+    id: "30000000-0000-4000-8000-000000000004",
     clinical_record_id: "c1000000-0000-4000-8000-000000000002",
     eye: "OI",
     sphere: 1.0,
@@ -719,37 +790,37 @@ export const INITIAL_PRESCRIPTIONS: Prescription[] = [
 export const INITIAL_APPOINTMENTS: Appointment[] = [
   {
     id: "a1000000-0000-4000-8000-000000000001",
-    patient_id: "p1000000-0000-4000-8000-000000000001",
-    optometrist_id: "u1000000-0000-4000-8000-000000000002",
+    patient_id: "20000000-0000-4000-8000-000000000001",
+    optometrist_id: "10000000-0000-4000-8000-000000000002",
     starts_at: "2026-11-18T11:00:00-06:00",
     ends_at: "2026-11-18T11:45:00-06:00",
     status: "confirmed",
     reason: "Prueba en sucursal: Tom Ford FT5401 Blue Block (SKU: TF5401-001) y ajuste de puente",
-    created_by: "u1000000-0000-4000-8000-000000000003",
+    created_by: "10000000-0000-4000-8000-000000000003",
     created_at: "2026-11-16T18:00:00-06:00",
     updated_at: "2026-11-16T18:05:00-06:00",
   },
   {
     id: "a1000000-0000-4000-8000-000000000002",
-    patient_id: "p1000000-0000-4000-8000-000000000002",
-    optometrist_id: "u1000000-0000-4000-8000-000000000004",
+    patient_id: "20000000-0000-4000-8000-000000000002",
+    optometrist_id: "10000000-0000-4000-8000-000000000004",
     starts_at: "2026-11-18T13:00:00-06:00",
     ends_at: "2026-11-18T13:45:00-06:00",
     status: "scheduled",
     reason: "Adaptación de lentes progresivos Varilux Physio 3.0 y prueba de armazón Oakley Titanio",
-    created_by: "u1000000-0000-4000-8000-000000000005",
+    created_by: "10000000-0000-4000-8000-000000000005",
     created_at: "2026-11-16T12:30:00-06:00",
     updated_at: "2026-11-16T12:30:00-06:00",
   },
   {
     id: "a1000000-0000-4000-8000-000000000003",
-    patient_id: "p1000000-0000-4000-8000-000000000003",
-    optometrist_id: "u1000000-0000-4000-8000-000000000002",
+    patient_id: "20000000-0000-4000-8000-000000000003",
+    optometrist_id: "10000000-0000-4000-8000-000000000002",
     starts_at: "2026-11-19T16:30:00-06:00",
     ends_at: "2026-11-19T17:15:00-06:00",
     status: "scheduled",
     reason: "Examen visual computarizado anual + Prueba en sucursal Persol Cellor Sartoriale (SKU: PO3007VM-24)",
-    created_by: "u1000000-0000-4000-8000-000000000007",
+    created_by: "10000000-0000-4000-8000-000000000007",
     created_at: "2026-11-17T09:15:00-06:00",
     updated_at: "2026-11-17T09:15:00-06:00",
   },

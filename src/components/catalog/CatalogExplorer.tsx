@@ -1,10 +1,12 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Calendar,
+  Database,
   Eye,
   Filter,
+  Loader2,
   Ruler,
   Search,
   SlidersHorizontal,
@@ -12,14 +14,20 @@ import {
   Tag,
   X,
 } from "lucide-react";
+import type { Brand, FrameMaterial, LensMaterial } from "@/types/database";
 import {
   MOCK_BRANDS,
   MOCK_CATALOG_ITEMS,
+  catalogProductToItem,
   formatFrameMeasurements,
   formatPriceMXN,
   type CatalogItem,
   type CatalogProductCategory,
 } from "./mockCatalogData";
+import {
+  fetchBrandsApi,
+  fetchCatalogProductsApi,
+} from "@/components/providers/apiClient";
 import { ProductVisual } from "./ProductVisual";
 import { ProductDetailModal } from "./ProductDetailModal";
 
@@ -27,31 +35,192 @@ const CATEGORY_TABS: {
   key: "all" | CatalogProductCategory;
   label: string;
 }[] = [
-  { key: "all", label: "Todo el Catálogo" },
-  { key: "armazones_oftalmicos", label: "Armazones oftálmicos" },
-  { key: "lentes_sol", label: "Lentes de sol" },
-  { key: "micas_tratamientos", label: "Micas/Tratamientos" },
-];
+    { key: "all", label: "Todo el Catálogo" },
+    { key: "armazones_oftalmicos", label: "Armazones oftálmicos" },
+    { key: "lentes_sol", label: "Lentes de sol" },
+    { key: "micas_tratamientos", label: "Micas/Tratamientos" },
+  ];
+
+const FRAME_MATERIALS = new Set<string>([
+  "acetato",
+  "metal",
+  "titanio",
+  "tr90",
+  "mixto",
+]);
+const LENS_MATERIALS = new Set<string>([
+  "cr39",
+  "policarbonato",
+  "trivex",
+  "alto_indice",
+  "mineral",
+]);
 
 export function CatalogExplorer({
   showHeader = true,
 }: {
   showHeader?: boolean;
 }) {
+  const [brands, setBrands] = useState<Brand[]>(MOCK_BRANDS);
+  const [apiItems, setApiItems] = useState<CatalogItem[] | null>(null);
+  const [isLoadingCatalog, setIsLoadingCatalog] = useState<boolean>(false);
+  const [dataSource, setDataSource] = useState<"supabase" | "demo">("demo");
+
   const [selectedBrandSlug, setSelectedBrandSlug] = useState<string>("all");
   const [selectedCategory, setSelectedCategory] = useState<
     "all" | CatalogProductCategory
   >("all");
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [selectedMaterial, setSelectedMaterial] = useState<string>("all");
-  const [sortOrder, setSortOrder] = useState<"featured" | "price_asc" | "price_desc">(
-    "featured"
-  );
+  const [sortOrder, setSortOrder] = useState<
+    "featured" | "price_asc" | "price_desc"
+  >("featured");
   const [activeModalItem, setActiveModalItem] = useState<CatalogItem | null>(
     null
   );
 
+  // 1. Cargar marcas reales desde GET /api/brands
+  useEffect(() => {
+    let cancelled = false;
+    fetchBrandsApi()
+      .then((realBrands) => {
+        if (!cancelled && realBrands.length > 0) {
+          setBrands(realBrands);
+        }
+      })
+      .catch(() => {
+        // Fallback silencioso a MOCK_BRANDS si el backend aún no tiene .env configurado
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 2. Consultar productos reales desde /api/catalog/frames y /api/catalog/lenses
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchFromBackend = async () => {
+      setIsLoadingCatalog(true);
+      try {
+        const selectedBrand =
+          selectedBrandSlug === "all"
+            ? undefined
+            : brands.find((b) => b.slug === selectedBrandSlug);
+        const brandId = selectedBrand?.id;
+
+        const isFrameMaterial = FRAME_MATERIALS.has(selectedMaterial);
+        const isLensMaterial = LENS_MATERIALS.has(selectedMaterial);
+
+        const shouldQueryFrames =
+          (selectedCategory === "all" ||
+            selectedCategory === "armazones_oftalmicos" ||
+            selectedCategory === "lentes_sol") &&
+          !isLensMaterial;
+
+        const shouldQueryLenses =
+          (selectedCategory === "all" ||
+            selectedCategory === "micas_tratamientos") &&
+          !isFrameMaterial;
+
+        const segmentFilter =
+          selectedCategory === "armazones_oftalmicos"
+            ? "oftalmico"
+            : selectedCategory === "lentes_sol"
+              ? "solar"
+              : undefined;
+
+        const [framesPage, lensesPage] = await Promise.all([
+          shouldQueryFrames
+            ? fetchCatalogProductsApi("frames", {
+              brand_id: brandId,
+              segment: segmentFilter,
+              material: isFrameMaterial
+                ? (selectedMaterial as FrameMaterial)
+                : undefined,
+              sort: sortOrder,
+              search: searchQuery.trim() || undefined,
+              limit: 50,
+            })
+            : Promise.resolve(null),
+          shouldQueryLenses
+            ? fetchCatalogProductsApi("lenses", {
+              brand_id: brandId,
+              material: isLensMaterial
+                ? (selectedMaterial as LensMaterial)
+                : undefined,
+              sort: sortOrder,
+              search: searchQuery.trim() || undefined,
+              limit: 50,
+            })
+            : Promise.resolve(null),
+        ]);
+
+        if (cancelled) return;
+
+        const mappedFrames = (framesPage?.items ?? []).map((p) =>
+          catalogProductToItem(p, "frames")
+        );
+        const mappedLenses = (lensesPage?.items ?? []).map((p) =>
+          catalogProductToItem(p, "lenses")
+        );
+        const combined = [...mappedFrames, ...mappedLenses];
+
+        if (combined.length > 0) {
+          setApiItems(combined);
+          setDataSource("supabase");
+        } else {
+          // Si la base de datos aún no tiene productos sembrados (solo las 6 marcas de la migración),
+          // mostramos el catálogo demo local cuando no hay resultados en una consulta general,
+          // o el array vacío si ya está en modo supabase activo
+          setApiItems(null);
+          setDataSource("demo");
+        }
+      } catch {
+        if (!cancelled) {
+          setApiItems(null);
+          setDataSource("demo");
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingCatalog(false);
+        }
+      }
+    };
+
+    void fetchFromBackend();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    brands,
+    selectedBrandSlug,
+    selectedCategory,
+    selectedMaterial,
+    searchQuery,
+    sortOrder,
+  ]);
+
   const filteredItems = useMemo(() => {
+    if (apiItems !== null) {
+      if (sortOrder === "price_asc") {
+        return [...apiItems].sort((a, b) => {
+          const pa = a.kind === "frame" ? a.frame.price : a.lens.price;
+          const pb = b.kind === "frame" ? b.frame.price : b.lens.price;
+          return pa - pb;
+        });
+      }
+      if (sortOrder === "price_desc") {
+        return [...apiItems].sort((a, b) => {
+          const pa = a.kind === "frame" ? a.frame.price : a.lens.price;
+          const pb = b.kind === "frame" ? b.frame.price : b.lens.price;
+          return pb - pa;
+        });
+      }
+      return apiItems;
+    }
+
     const q = searchQuery.trim().toLowerCase();
 
     const filtered = MOCK_CATALOG_ITEMS.filter((item) => {
@@ -111,7 +280,14 @@ export function CatalogExplorer({
     }
 
     return filtered;
-  }, [selectedBrandSlug, selectedCategory, selectedMaterial, searchQuery, sortOrder]);
+  }, [
+    apiItems,
+    selectedBrandSlug,
+    selectedCategory,
+    selectedMaterial,
+    searchQuery,
+    sortOrder,
+  ]);
 
   const resetFilters = () => {
     setSelectedBrandSlug("all");
@@ -126,10 +302,23 @@ export function CatalogExplorer({
       {showHeader && (
         <div className="flex flex-col justify-between gap-4 border-b border-slate-200 pb-6 md:flex-row md:items-end">
           <div>
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700 ring-1 ring-sky-600/20">
-              <Sparkles className="h-3.5 w-3.5" />
-              Catálogo Oficial Autorizado
-            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700 ring-1 ring-sky-600/20">
+                <Sparkles className="h-3.5 w-3.5" />
+                Catálogo Oficial Autorizado
+              </span>
+              <span
+                className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium ${dataSource === "supabase"
+                    ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-600/20"
+                    : "bg-slate-100 text-slate-600"
+                  }`}
+              >
+                <Database className="h-3 w-3" />
+                {dataSource === "supabase"
+                  ? "Conectado a /api/catalog"
+                  : "Catálogo Demo / Fallback"}
+              </span>
+            </div>
             <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">
               Marcas Internacionales, Armazones y Micas Oftálmicas
             </h1>
@@ -139,12 +328,17 @@ export function CatalogExplorer({
               clínica.
             </p>
           </div>
-          <div className="text-right text-xs text-slate-500">
-            Mostrando{" "}
-            <strong className="font-semibold text-slate-900">
-              {filteredItems.length}
-            </strong>{" "}
-            de {MOCK_CATALOG_ITEMS.length} productos clínicos
+          <div className="flex items-center gap-2 text-right text-xs text-slate-500">
+            {isLoadingCatalog && (
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-600" />
+            )}
+            <span>
+              Mostrando{" "}
+              <strong className="font-semibold text-slate-900">
+                {filteredItems.length}
+              </strong>{" "}
+              productos clínicos
+            </span>
           </div>
         </div>
       )}
@@ -170,24 +364,23 @@ export function CatalogExplorer({
           <button
             type="button"
             onClick={() => setSelectedBrandSlug("all")}
-            className={`flex flex-col justify-between rounded-xl border p-3 text-left transition-all ${
-              selectedBrandSlug === "all"
+            className={`flex flex-col justify-between rounded-xl border p-3 text-left transition-all ${selectedBrandSlug === "all"
                 ? "border-sky-600 bg-sky-50/70 shadow-sm ring-1 ring-sky-600"
                 : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
-            }`}
+              }`}
           >
             <span className="text-xs font-semibold uppercase tracking-wider text-sky-700">
               Todas
             </span>
             <span className="mt-1 text-sm font-bold text-slate-900">
-              6 Marcas
+              {brands.length} Marcas
             </span>
             <span className="mt-0.5 text-[11px] text-slate-500">
-              {MOCK_CATALOG_ITEMS.length} referencias
+              Catálogo oficial
             </span>
           </button>
 
-          {MOCK_BRANDS.map((brand) => {
+          {brands.map((brand) => {
             const isSelected = selectedBrandSlug === brand.slug;
             const count = MOCK_CATALOG_ITEMS.filter(
               (i) => i.brand.slug === brand.slug
@@ -200,11 +393,10 @@ export function CatalogExplorer({
                 onClick={() =>
                   setSelectedBrandSlug(isSelected ? "all" : brand.slug)
                 }
-                className={`flex flex-col justify-between rounded-xl border p-3 text-left transition-all ${
-                  isSelected
+                className={`flex flex-col justify-between rounded-xl border p-3 text-left transition-all ${isSelected
                     ? "border-sky-600 bg-sky-50/70 shadow-sm ring-1 ring-sky-600"
                     : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
-                }`}
+                  }`}
               >
                 <div className="flex items-center justify-between gap-1">
                   <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
@@ -218,7 +410,7 @@ export function CatalogExplorer({
                   {brand.name}
                 </span>
                 <span className="mt-0.5 text-[11px] text-slate-500">
-                  {count} {count === 1 ? "producto" : "productos"}
+                  {brand.frames_count ?? count} referencias
                 </span>
               </button>
             );
@@ -240,11 +432,10 @@ export function CatalogExplorer({
                   role="tab"
                   aria-selected={active}
                   onClick={() => setSelectedCategory(tab.key)}
-                  className={`rounded-xl px-3.5 py-2 text-xs font-semibold transition-all sm:text-sm ${
-                    active
+                  className={`rounded-xl px-3.5 py-2 text-xs font-semibold transition-all sm:text-sm ${active
                       ? "bg-slate-900 text-white shadow-sm"
                       : "bg-slate-100 text-slate-600 hover:bg-slate-200/80 hover:text-slate-900"
-                  }`}
+                    }`}
                 >
                   {tab.label}
                 </button>
@@ -363,13 +554,12 @@ export function CatalogExplorer({
                       {item.brand.name}
                     </span>
                     <span
-                      className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium ${
-                        item.categoryKey === "armazones_oftalmicos"
+                      className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium ${item.categoryKey === "armazones_oftalmicos"
                           ? "bg-sky-50 text-sky-700 ring-1 ring-sky-600/15"
                           : item.categoryKey === "lentes_sol"
                             ? "bg-amber-50 text-amber-800 ring-1 ring-amber-600/15"
                             : "bg-teal-50 text-teal-800 ring-1 ring-teal-600/15"
-                      }`}
+                        }`}
                     >
                       {item.categoryLabel}
                     </span>
@@ -390,7 +580,7 @@ export function CatalogExplorer({
                         <Tag className="h-3 w-3 text-sky-600" />
                         SKU: {sku}
                       </span>
-                      <span className="text-[11px] text-emerald-700 font-medium">
+                      <span className="text-[11px] font-medium text-emerald-700">
                         En stock ({isFrame ? item.frame.stock : item.lens.stock})
                       </span>
                     </div>

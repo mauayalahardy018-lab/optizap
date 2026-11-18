@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
+  AlertCircle,
   Calendar,
   CheckCircle2,
   Clock,
@@ -13,7 +14,8 @@ import {
 } from "lucide-react";
 import { useRole } from "@/components/providers/RoleProvider";
 import { MOCK_CATALOG_ITEMS } from "@/components/catalog/mockCatalogData";
-import type { AppointmentStatus } from "@/types/database";
+import { fetchAvailableSlotsApi } from "@/components/providers/apiClient";
+import type { AppointmentStatus, AvailableSlot } from "@/types/database";
 
 const STATUS_BADGES: Record<
   AppointmentStatus,
@@ -41,67 +43,160 @@ const STATUS_BADGES: Record<
   },
 };
 
+const DEFAULT_HOURS = ["10:00", "11:00", "12:00", "13:00", "16:00", "17:00"];
+
 export default function CitasPage() {
   const {
     activeRole,
     currentUser,
-    users,
+    optometrists,
     patients,
+    myPatient,
     appointments,
     scheduleAppointment,
     updateAppointmentStatus,
   } = useRole();
 
-  const optometrists = users.filter((u) => u.role === "optometrista");
-
   const [patientId, setPatientId] = useState(patients[0]?.id ?? "");
   const [optometristId, setOptometristId] = useState(
-    optometrists[0]?.id ?? "u1000000-0000-4000-8000-000000000002"
+    optometrists[0]?.id ?? "10000000-0000-4000-8000-000000000002"
   );
-  const [date, setDate] = useState("2026-11-21");
+  const [date, setDate] = useState("2026-11-18");
   const [time, setTime] = useState("11:00");
+  const [availableSlots, setAvailableSlots] = useState<AvailableSlot[] | null>(
+    null
+  );
   const [selectedSku, setSelectedSku] = useState("RB5154-2000");
   const [customReason, setCustomReason] = useState(
     "Examen de la vista computarizado y prueba de armazón en sucursal"
   );
-  const [createdBanner, setCreatedBanner] = useState(false);
+  const [createdBanner, setCreatedBanner] = useState<string | null>(null);
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (patients.length > 0 && !patients.some((p) => p.id === patientId)) {
+      setPatientId(patients[0].id);
+    }
+  }, [patients, patientId]);
+
+  useEffect(() => {
+    if (
+      optometrists.length > 0 &&
+      !optometrists.some((o) => o.id === optometristId)
+    ) {
+      setOptometristId(optometrists[0].id);
+    }
+  }, [optometrists, optometristId]);
+
+  // Consultar disponibilidad real en /api/appointments/availability
+  useEffect(() => {
+    if (!date || !optometristId) return;
+    let cancelled = false;
+    fetchAvailableSlotsApi({
+      date,
+      optometrist_id: optometristId,
+      duration_minutes: 45,
+    })
+      .then((slots) => {
+        if (!cancelled && slots.length > 0) {
+          setAvailableSlots(slots);
+        } else if (!cancelled) {
+          setAvailableSlots(null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setAvailableSlots(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [date, optometristId]);
+
+  const clientPatientId =
+    myPatient?.id ??
+    patients.find((p) => p.profile_id === currentUser.id)?.id ??
+    "20000000-0000-4000-8000-000000000001";
 
   const visibleAppointments =
     activeRole === "cliente"
-      ? appointments.filter(
-          (a) => a.patient_id === "p1000000-0000-4000-8000-000000000001"
-        )
+      ? appointments.filter((a) => a.patient_id === clientPatientId)
       : activeRole === "optometrista"
         ? appointments.filter((a) => a.optometrist_id === currentUser.id)
         : appointments;
 
-  const handleCreateAppointment = (e: React.FormEvent) => {
+  const handleCreateAppointment = async (e: React.FormEvent) => {
     e.preventDefault();
-    const startsAt = `${date}T${time}:00-06:00`;
-    const [h] = time.split(":");
-    const endsAt = `${date}T${h}:45:00-06:00`;
+    setCreatedBanner(null);
+    setErrorBanner(null);
+    setIsSubmitting(true);
 
-    const skuItem = MOCK_CATALOG_ITEMS.find((i) =>
-      i.kind === "frame" ? i.frame.sku === selectedSku : i.lens.sku === selectedSku
-    );
-    const productLabel = skuItem
-      ? `${skuItem.brand.name} ${
-          skuItem.kind === "frame" ? skuItem.frame.name : skuItem.lens.name
-        } (SKU: ${selectedSku})`
-      : selectedSku;
+    try {
+      let startsAt = `${date}T${time}:00-06:00`;
+      const [h] = time.split(":");
+      let endsAt = `${date}T${h}:45:00-06:00`;
 
-    scheduleAppointment({
-      patient_id:
-        activeRole === "cliente"
-          ? "p1000000-0000-4000-8000-000000000001"
-          : patientId,
-      optometrist_id: optometristId,
-      starts_at: startsAt,
-      ends_at: endsAt,
-      reason: `${customReason} • Modelo apartado: ${productLabel}`,
-    });
+      if (availableSlots && availableSlots.length > 0) {
+        const matched = availableSlots.find((s) =>
+          s.starts_at.includes(`T${time}`)
+        );
+        if (matched) {
+          startsAt = matched.starts_at;
+          endsAt = matched.ends_at;
+        }
+      }
 
-    setCreatedBanner(true);
+      const skuItem = MOCK_CATALOG_ITEMS.find((i) =>
+        i.kind === "frame"
+          ? i.frame.sku === selectedSku
+          : i.lens.sku === selectedSku
+      );
+      const productLabel = skuItem
+        ? `${skuItem.brand.name} ${
+            skuItem.kind === "frame" ? skuItem.frame.name : skuItem.lens.name
+          } (SKU: ${selectedSku})`
+        : selectedSku;
+
+      const created = await scheduleAppointment({
+        patient_id: activeRole === "cliente" ? clientPatientId : patientId,
+        optometrist_id: optometristId,
+        starts_at: startsAt,
+        ends_at: endsAt,
+        reason: `${customReason} • Modelo apartado: ${productLabel}`,
+      });
+
+      setCreatedBanner(
+        `Cita registrada exitosamente (${created.id.slice(0, 8)}) con estado scheduled.`
+      );
+    } catch (err) {
+      setErrorBanner(
+        err instanceof Error
+          ? err.message
+          : "No fue posible registrar la cita."
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleStatusChange = async (
+    id: string,
+    status: Exclude<AppointmentStatus, "scheduled">
+  ) => {
+    setErrorBanner(null);
+    setCreatedBanner(null);
+    try {
+      await updateAppointmentStatus(id, status);
+      setCreatedBanner(
+        `Estado de la cita ${id.slice(0, 8)} actualizado a ${status}.`
+      );
+    } catch (err) {
+      setErrorBanner(
+        err instanceof Error
+          ? err.message
+          : "No fue posible cambiar el estado de la cita."
+      );
+    }
   };
 
   return (
@@ -111,7 +206,7 @@ export default function CitasPage() {
         <div>
           <span className="inline-flex items-center gap-1.5 rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700 ring-1 ring-sky-600/20">
             <Calendar className="h-3.5 w-3.5" />
-            Agenda Clínica y Boutique (Tabla: appointments)
+            Agenda Clínica y Boutique (GET/POST /api/appointments)
           </span>
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">
             Agendamiento de Citas y Pruebas en Sucursal
@@ -119,7 +214,7 @@ export default function CitasPage() {
           <p className="mt-1 text-sm text-slate-600">
             {activeRole === "cliente"
               ? "Agenda tu examen visual o aparta armazones del catálogo para probarlos en sucursal."
-              : "Administra las citas programadas, confirma asistencia y evita traslapes de horario (restricción GiST)."}
+              : "Administra las citas programadas, confirma asistencia y evita traslapes de horario (restricción GiST 23P01)."}
           </p>
         </div>
 
@@ -129,6 +224,24 @@ export default function CitasPage() {
           {visibleAppointments.length} citas visibles
         </div>
       </div>
+
+      {/* Alertas de éxito o conflicto de horario (SLOT_UNAVAILABLE 409) */}
+      {errorBanner && (
+        <div className="flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-medium text-rose-900 sm:text-sm">
+          <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
+          <div>
+            <strong className="font-bold">Conflicto o Error de Agenda: </strong>
+            <span>{errorBanner}</span>
+          </div>
+        </div>
+      )}
+
+      {createdBanner && (
+        <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-medium text-emerald-900 sm:text-sm">
+          <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" />
+          <span>{createdBanner}</span>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-12">
         {/* Formulario para agendar nueva cita */}
@@ -140,24 +253,16 @@ export default function CitasPage() {
             </h2>
             <p className="mt-1 text-xs text-slate-500">
               Duración estándar de 45 minutos en huso horario{" "}
-              <code>America/Mexico_City</code>.
+              <code>America/Mexico_City</code>. Prueba agendar en un horario ya
+              ocupado (ej. 18 Nov 11:00) para verificar el bloqueo de traslape{" "}
+              <code>SLOT_UNAVAILABLE</code>.
             </p>
-
-            {createdBanner && (
-              <div className="mt-4 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-medium text-emerald-800">
-                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
-                <span>
-                  Cita registrada exitosamente con estado{" "}
-                  <code>scheduled</code>.
-                </span>
-              </div>
-            )}
 
             <form onSubmit={handleCreateAppointment} className="mt-5 space-y-4">
               {activeRole !== "cliente" && (
                 <div>
                   <label className="block text-xs font-semibold text-slate-700">
-                    Paciente
+                    Paciente (/api/patients)
                   </label>
                   <select
                     value={patientId}
@@ -166,7 +271,7 @@ export default function CitasPage() {
                   >
                     {patients.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.full_name} ({p.email})
+                        {p.full_name} ({p.email ?? "Sin correo"})
                       </option>
                     ))}
                   </select>
@@ -175,7 +280,7 @@ export default function CitasPage() {
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700">
-                  Optometrista Asignado
+                  Optometrista Asignado (/api/optometrists)
                 </label>
                 <select
                   value={optometristId}
@@ -184,7 +289,7 @@ export default function CitasPage() {
                 >
                   {optometrists.map((opt) => (
                     <option key={opt.id} value={opt.id}>
-                      {opt.full_name} ({opt.email})
+                      {opt.full_name}
                     </option>
                   ))}
                 </select>
@@ -213,12 +318,11 @@ export default function CitasPage() {
                     onChange={(e) => setTime(e.target.value)}
                     className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-sky-500 focus:bg-white focus:outline-none sm:text-sm"
                   >
-                    <option value="10:00">10:00 - 10:45</option>
-                    <option value="11:00">11:00 - 11:45</option>
-                    <option value="12:00">12:00 - 12:45</option>
-                    <option value="13:00">13:00 - 13:45</option>
-                    <option value="16:00">16:00 - 16:45</option>
-                    <option value="17:00">17:00 - 17:45</option>
+                    {DEFAULT_HOURS.map((h) => (
+                      <option key={h} value={h}>
+                        {h} - {h.split(":")[0]}:45
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -261,10 +365,11 @@ export default function CitasPage() {
 
               <button
                 type="submit"
-                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-sky-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-700"
+                disabled={isSubmitting}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-sky-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-700 disabled:opacity-50"
               >
                 <Calendar className="h-4 w-4" />
-                Confirmar Agendamiento
+                {isSubmitting ? "Registrando..." : "Confirmar Agendamiento"}
               </button>
             </form>
           </div>
@@ -274,7 +379,9 @@ export default function CitasPage() {
         <div className="space-y-4 lg:col-span-7">
           {visibleAppointments.map((apt) => {
             const patient = patients.find((p) => p.id === apt.patient_id);
-            const optometrist = users.find((u) => u.id === apt.optometrist_id);
+            const optometrist = optometrists.find(
+              (u) => u.id === apt.optometrist_id
+            );
             const badge = STATUS_BADGES[apt.status];
             const start = new Date(apt.starts_at);
             const end = new Date(apt.ends_at);
@@ -348,7 +455,7 @@ export default function CitasPage() {
                   <span className="text-[11px] text-slate-400">
                     {activeRole === "cliente"
                       ? "Permiso RLS Cliente: puede cancelar citas propias futuras."
-                      : "Permiso RLS Personal/Admin: actualizar estado de cita."}
+                      : "PATCH /api/appointments/:id/status (Admin / Recepción / Optometrista)"}
                   </span>
 
                   <div className="flex flex-wrap gap-2">
@@ -356,7 +463,7 @@ export default function CitasPage() {
                       <button
                         type="button"
                         onClick={() =>
-                          updateAppointmentStatus(apt.id, "confirmed")
+                          void handleStatusChange(apt.id, "confirmed")
                         }
                         className="rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
                       >
@@ -367,30 +474,41 @@ export default function CitasPage() {
                     {activeRole !== "cliente" &&
                       (apt.status === "scheduled" ||
                         apt.status === "confirmed") && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            updateAppointmentStatus(apt.id, "completed")
-                          }
-                          className="rounded-lg bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-100"
-                        >
-                          Marcar Completada
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleStatusChange(apt.id, "completed")
+                            }
+                            className="rounded-lg bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-100"
+                          >
+                            Marcar Completada
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleStatusChange(apt.id, "no_show")
+                            }
+                            className="rounded-lg bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100"
+                          >
+                            No Asistió
+                          </button>
+                        </>
                       )}
 
-                    {apt.status !== "cancelled" &&
-                      apt.status !== "completed" && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            updateAppointmentStatus(apt.id, "cancelled")
-                          }
-                          className="inline-flex items-center gap-1 rounded-lg bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100"
-                        >
-                          <XCircle className="h-3.5 w-3.5" />
-                          Cancelar Cita
-                        </button>
-                      )}
+                    {(apt.status === "scheduled" ||
+                      apt.status === "confirmed") && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void handleStatusChange(apt.id, "cancelled")
+                        }
+                        className="inline-flex items-center gap-1 rounded-lg bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                      >
+                        <XCircle className="h-3.5 w-3.5" />
+                        Cancelar Cita
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>

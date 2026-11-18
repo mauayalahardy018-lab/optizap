@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import {
+  AlertCircle,
   Calendar,
   CheckCircle2,
   MapPin,
@@ -12,26 +13,67 @@ import {
   Tag,
   X,
 } from "lucide-react";
+import type { AvailableSlot } from "@/types/database";
 import type { CatalogItem } from "./mockCatalogData";
 import { formatFrameMeasurements, formatPriceMXN } from "./mockCatalogData";
 import { ProductVisual } from "./ProductVisual";
 import { useRole } from "@/components/providers/RoleProvider";
+import { fetchAvailableSlotsApi } from "@/components/providers/apiClient";
 
 interface ProductDetailModalProps {
   item: CatalogItem | null;
   onClose: () => void;
 }
 
+const DEFAULT_TIMES = ["10:00", "11:00", "12:00", "16:00", "17:00"];
+
 export function ProductDetailModal({ item, onClose }: ProductDetailModalProps) {
-  const { users, scheduleAppointment, currentUser } = useRole();
+  const { optometrists, scheduleAppointment, currentUser } = useRole();
   const [selectedDate, setSelectedDate] = useState("2026-11-20");
   const [selectedTime, setSelectedTime] = useState("12:00");
+  const [selectedOptometristId, setSelectedOptometristId] = useState(
+    optometrists[0]?.id ?? "10000000-0000-4000-8000-000000000002"
+  );
+  const [availableSlots, setAvailableSlots] = useState<AvailableSlot[] | null>(
+    null
+  );
   const [selectedBranch, setSelectedBranch] = useState(
     "Boutique Polanco (Av. Masaryk 420)"
   );
   const [bookedAppointmentId, setBookedAppointmentId] = useState<string | null>(
     null
   );
+  const [bookingError, setBookingError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (optometrists.length > 0 && !optometrists.some((o) => o.id === selectedOptometristId)) {
+      setSelectedOptometristId(optometrists[0].id);
+    }
+  }, [optometrists, selectedOptometristId]);
+
+  useEffect(() => {
+    if (!item || !selectedOptometristId || !selectedDate) return;
+    let cancelled = false;
+    fetchAvailableSlotsApi({
+      date: selectedDate,
+      optometrist_id: selectedOptometristId,
+      duration_minutes: 45,
+    })
+      .then((slots) => {
+        if (!cancelled && slots.length > 0) {
+          setAvailableSlots(slots);
+        } else if (!cancelled) {
+          setAvailableSlots(null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setAvailableSlots(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [item, selectedDate, selectedOptometristId]);
 
   if (!item) return null;
 
@@ -41,26 +83,49 @@ export function ProductDetailModal({ item, onClose }: ProductDetailModalProps) {
   const price = isFrame ? item.frame.price : item.lens.price;
   const stock = isFrame ? item.frame.stock : item.lens.stock;
 
-  const optometrists = users.filter((u) => u.role === "optometrista");
-  const defaultOptometrist = optometrists[0];
+  const activeOptometrist =
+    optometrists.find((o) => o.id === selectedOptometristId) ?? optometrists[0];
 
-  const handleBookTrial = (e: React.FormEvent) => {
+  const handleBookTrial = async (e: React.FormEvent) => {
     e.preventDefault();
-    const startsAt = `${selectedDate}T${selectedTime}:00-06:00`;
-    const [hourStr, minStr] = selectedTime.split(":");
-    const endHour = String(Number(hourStr)).padStart(2, "0");
-    const endMin = Number(minStr) === 0 ? "45" : "59";
-    const endsAt = `${selectedDate}T${endHour}:${endMin}:00-06:00`;
+    setBookingError(null);
+    setIsSubmitting(true);
 
-    const created = scheduleAppointment({
-      optometrist_id:
-        defaultOptometrist?.id ?? "u1000000-0000-4000-8000-000000000002",
-      starts_at: startsAt,
-      ends_at: endsAt,
-      reason: `Prueba en sucursal (${selectedBranch}): ${item.brand.name} ${name} [SKU: ${sku}]`,
-    });
+    try {
+      let startsAt = `${selectedDate}T${selectedTime}:00-06:00`;
+      const [hourStr, minStr] = selectedTime.split(":");
+      const endHour = String(Number(hourStr)).padStart(2, "0");
+      const endMin = Number(minStr) === 0 ? "45" : "59";
+      let endsAt = `${selectedDate}T${endHour}:${endMin}:00-06:00`;
 
-    setBookedAppointmentId(created.id);
+      if (availableSlots && availableSlots.length > 0) {
+        const matchedSlot = availableSlots.find((s) =>
+          s.starts_at.includes(`T${selectedTime}`)
+        );
+        if (matchedSlot) {
+          startsAt = matchedSlot.starts_at;
+          endsAt = matchedSlot.ends_at;
+        }
+      }
+
+      const created = await scheduleAppointment({
+        optometrist_id:
+          activeOptometrist?.id ?? "10000000-0000-4000-8000-000000000002",
+        starts_at: startsAt,
+        ends_at: endsAt,
+        reason: `Prueba en sucursal (${selectedBranch}): ${item.brand.name} ${name} [SKU: ${sku}]`,
+      });
+
+      setBookedAppointmentId(created.id);
+    } catch (err) {
+      setBookingError(
+        err instanceof Error
+          ? err.message
+          : "No fue posible agendar la prueba en sucursal."
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -91,14 +156,14 @@ export function ProductDetailModal({ item, onClose }: ProductDetailModalProps) {
           </button>
         </div>
 
-        <div className=" space-y-6 p-6">
+        <div className="space-y-6 p-6">
           {/* Visual e información principal */}
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
             <ProductVisual item={item} size="modal" />
 
             <div className="flex flex-col justify-between space-y-4">
               <div>
-                <div className="flex items-center gap-1.5 text-xs font-mono text-slate-500">
+                <div className="flex items-center gap-1.5 font-mono text-xs text-slate-500">
                   <Tag className="h-3.5 w-3.5 text-sky-600" />
                   <span>SKU Oficial: {sku}</span>
                 </div>
@@ -167,7 +232,7 @@ export function ProductDetailModal({ item, onClose }: ProductDetailModalProps) {
                   <span className="mt-0.5 block text-sm font-semibold text-slate-900">
                     {item.materialDisplay}
                   </span>
-                  <span className="text-[10px] text-slate-400 capitalize">
+                  <span className="text-[10px] capitalize text-slate-400">
                     Tipo BD: {item.frame.material}
                   </span>
                 </div>
@@ -178,7 +243,7 @@ export function ProductDetailModal({ item, onClose }: ProductDetailModalProps) {
                   <span className="mt-0.5 block font-mono text-sm font-semibold text-slate-900">
                     {item.frame.lens_height_mm ?? "40.0"} mm
                   </span>
-                  <span className="text-[10px] text-slate-400 capitalize">
+                  <span className="text-[10px] capitalize text-slate-400">
                     Género: {item.frame.gender}
                   </span>
                 </div>
@@ -252,9 +317,16 @@ export function ProductDetailModal({ item, onClose }: ProductDetailModalProps) {
               </div>
               <span className="inline-flex items-center gap-1 text-xs text-slate-300">
                 <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
-                Reserva sin costo
+                Validación de traslapes GiST
               </span>
             </div>
+
+            {bookingError && (
+              <div className="mt-3 flex items-start gap-2 rounded-xl border border-rose-400/40 bg-rose-500/15 p-3 text-xs text-rose-200">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+                <span>{bookingError}</span>
+              </div>
+            )}
 
             {bookedAppointmentId ? (
               <div className="mt-4 rounded-xl bg-emerald-500/15 p-4 ring-1 ring-emerald-400/30">
@@ -339,11 +411,11 @@ export function ProductDetailModal({ item, onClose }: ProductDetailModalProps) {
                       onChange={(e) => setSelectedTime(e.target.value)}
                       className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800/90 px-3 py-2 text-xs text-white focus:border-sky-400 focus:outline-none"
                     >
-                      <option value="10:00">10:00 hrs</option>
-                      <option value="11:00">11:00 hrs</option>
-                      <option value="12:00">12:00 hrs</option>
-                      <option value="16:00">16:00 hrs</option>
-                      <option value="17:00">17:00 hrs</option>
+                      {DEFAULT_TIMES.map((t) => (
+                        <option key={t} value={t}>
+                          {t} hrs
+                        </option>
+                      ))}
                     </select>
                   </div>
                 </div>
@@ -352,14 +424,17 @@ export function ProductDetailModal({ item, onClose }: ProductDetailModalProps) {
                   <span className="inline-flex items-center gap-1.5 text-xs text-slate-300">
                     <MapPin className="h-3.5 w-3.5 text-sky-400" />
                     Incluye examen de refracción y ajuste anatómico con{" "}
-                    {defaultOptometrist?.full_name ?? "Optometrista titular"}
+                    {activeOptometrist?.full_name ?? "Optometrista titular"}
                   </span>
                   <button
                     type="submit"
-                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition hover:bg-sky-400"
+                    disabled={isSubmitting}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition hover:bg-sky-400 disabled:opacity-50"
                   >
                     <Calendar className="h-4 w-4" />
-                    Agendar prueba en sucursal
+                    {isSubmitting
+                      ? "Reservando..."
+                      : "Agendar prueba en sucursal"}
                   </button>
                 </div>
               </form>
