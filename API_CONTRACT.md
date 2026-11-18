@@ -6,6 +6,7 @@ Fuente de tipos: `src/types/database.ts`. Migración inicial:
 Funciones de servicios: `supabase/migrations/20261117233231_service_rpcs.sql`.
 Integración Frontend (segmento óptico/solar): `supabase/migrations/20261118000151_frontend_integration.sql`.
 Rama de integración: `feat/integration`, creada desde `feat/backend` e integrada con `origin/feat/frontend`.
+Autenticación SSR: `feat/auth-ssr`, creada desde `feat/integration`; configuración detallada en `SETUP_SUPABASE.md`.
 
 ## 1. Estado e invariantes
 
@@ -182,7 +183,7 @@ npx --yes supabase@2.101.0 db push --linked --dry-run
 npx --yes supabase@2.101.0 db push --linked
 ```
 
-No se ejecutaron estos comandos remotos en esta entrega. La configuración local expone public/graphql_public; **private no debe añadirse** a los esquemas de la Data API. No hay seed separado: las seis marcas forman parte de la migración.
+No se ejecutaron estos comandos remotos en esta entrega. La configuración local expone public/graphql_public; **private no debe añadirse** a los esquemas de la Data API. Las seis marcas forman parte de la primera migración y `supabase/seed.sql` permite completarlas de forma idempotente sin sobrescribir marcas existentes. En una instalación nueva ejecutar las tres migraciones y luego el seed; ver SETUP_SUPABASE.md.
 
 Referencias de implementación: [RLS](https://supabase.com/docs/guides/database/postgres/row-level-security), [datos de usuario](https://supabase.com/docs/guides/auth/managing-user-data), [privilegios por columna](https://supabase.com/docs/guides/database/postgres/column-level-security).
 
@@ -193,14 +194,32 @@ Implementación: `src/services/{catalog,appointments,patients,users}.ts`; rutas:
 ### Sesión, configuración y respuestas
 
 - Configurar `NEXT_PUBLIC_SUPABASE_URL` y `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (se admite como fallback `NEXT_PUBLIC_SUPABASE_ANON_KEY` del scaffolding). El cliente de cada solicitud usa las cookies de Supabase SSR, verifica al usuario con `auth.getUser()` y consulta su rol en `profiles`. No se usa service_role ni metadata editable para autorización.
-- El inicio de sesión del Frontend debe usar el cliente de `@supabase/ssr` para que la sesión se comparta por cookies. Estas rutas no aceptan un JWT arbitrario por body ni crean sesiones de login. Para llamadas `fetch` desde el mismo origen, las cookies se envían por defecto.
+- El inicio de sesión puede usar POST /api/auth/login o el cliente de navegador de `@supabase/ssr`; la sesión se comparte por cookies con Next.js. Las rutas privadas no aceptan JWT arbitrarios por body. Para llamadas `fetch` desde el mismo origen, las cookies se envían por defecto.
 - Las rutas escriben cookies renovadas desde el Route Handler y responden `Cache-Control: private, no-store`. No almacenar respuestas clínicas en cachés públicas.
-- El scaffolding declara SSR 0.5.x junto con un rango abierto de supabase-js; el adaptador normaliza la diferencia de orden de genéricos entre versiones en un solo punto. Las consultas de servicios permanecen tipadas con `Database`. No se cambian dependencias del Frontend en esta entrega.
+- Dependencias fijadas: SSR 0.12.7 y supabase-js 2.119.0, con lockfile y Node >=22. El adaptador anterior de genéricos fue eliminado; los clientes permanecen tipados con Database. Clientes de navegador, Server Components, Route Handlers y middleware documentados en SETUP_SUPABASE.md.
 - Éxito: `{ data: T }`, HTTP 200, o 201 al crear. Listados paginados: `{ data: { items: T[], total, limit, offset } }`.
 - Error: `{ error: { code: ApiErrorCode, message: string } }`, sin SQL, datos clínicos ni credenciales. Códigos: `VALIDATION_ERROR` (400), `UNAUTHENTICATED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `SLOT_UNAVAILABLE` (409), `UNAVAILABLE` (503) e `INTERNAL_ERROR` (500).
 - Las escrituras JSON requieren `Content-Type: application/json`, máximo 65536 caracteres, sin query string y sin campos desconocidos. Las solicitudes con Origin de otro sitio o `Sec-Fetch-Site: cross-site` son rechazadas. Los DELETE de desactivación/cancelación no requieren body.
 - `id`, `created_at`, `updated_at`, `created_by` y campos de joins no son entradas editables en estos servicios. UUID, enums, fechas, rangos y precisión decimal se validan antes de escribir. Las RLS y restricciones SQL siguen siendo la autoridad final.
 - La paginación admite `limit` entero 1–100 (default 25) y `offset` 0–100000 (default 0), con orden estable. Los parámetros repetidos son inválidos.
+
+### Autenticación SSR
+
+Factoría `createAuthService(db)` en `src/services/auth.ts`; tipos compartidos AuthLoginInput, AuthRegisterInput, AuthLoginResult, AuthRegisterResult y AuthLogoutResult. El cliente debe ser el de la solicitud; no compartir un cliente de servidor entre usuarios.
+
+| Método | Endpoint | Entrada | Respuesta |
+| --- | --- | --- | --- |
+| login(input) | POST /api/auth/login | AuthLoginInput: { email, password } | 200, data: AuthLoginResult; sesión escrita en cookies |
+| register(input) | POST /api/auth/register | AuthRegisterInput: { email, password, full_name } | 202 si requiere email, o 201 con sesión; data: AuthRegisterResult |
+| logout(input?) | POST /api/auth/logout | Sin cuerpo o {} | 200, data: AuthLogoutResult; scope local |
+| confirmEmail(input) | GET /api/auth/confirm | token_hash, type=email/signup, next? | 303 con cookies al destino canónico |
+| exchangeCode(input) | GET /api/auth/callback | code, next? | 303 tras PKCE; requiere verificador del mismo navegador |
+
+- AuthLoginResult: `{ user: { id, email } }`. AuthRegisterResult: `{ user: { id, email } | null, requires_email_confirmation: boolean }`; cuando falta confirmar, user es null para no exponer IDs reales/obfuscados ni distinguir cuentas existentes. AuthLogoutResult: `{ signed_out: true }`.
+- No se devuelven tokens, contraseñas ni metadata en JSON. Password no se recorta: login admite 1–128 caracteres y registro 8–128. El endpoint de registro acepta exclusivamente email/password/full_name; el trigger existente de auth.users siempre asigna cliente. No se requiere otra migración de Auth.
+- SITE_URL define el origen de confirmaciones/callback y debe ser un origen http/https sin ruta ni credenciales. next admite únicamente rutas relativas al mismo origen; se valida antes de consumir el enlace. La plantilla de correo recomendada está en supabase/templates/confirmation.html. Ver configuración de correo y URLs en SETUP_SUPABASE.md.
+- Errores adicionales: INVALID_CREDENTIALS (401), EMAIL_NOT_CONFIRMED (403), RATE_LIMITED (429), INVALID_CONFIRMATION (400). Los errores de autenticación no exponen mensajes internos de Supabase. Se mantienen las validaciones de JSON y origen; logout sin cuerpo es válido.
+- El middleware renueva sesiones y propaga las cookies al servidor y al navegador. Los endpoints privados siguen validando usuario con Auth y rol en profiles. No se crean guards visuales ni páginas de login: Frontend puede conectar sus formularios al contrato.
 
 ### Catálogo
 
@@ -322,7 +341,7 @@ Para la conexión real deben estar aplicadas las **tres migraciones** y configur
 ## Pendientes para Backend
 
 - [x] Consultas de catálogo: getBrands/getBrandBySlug y listProducts('frames', filtros), expuestas también por Route Handlers. No se exporta una Server Action llamada getFrames.
-- [x] Cliente SSR y getCurrentUserProfile vía GET /api/me/profile. El formulario de login y su sesión compartida por cookies deben integrarse desde Frontend.
+- [x] Clientes SSR navegador/servidor, middleware de renovación, login/registro/logout y confirmación; GET /api/me/profile devuelve el perfil real. Frontend debe consumir estos endpoints desde sus formularios.
 - [x] Definir políticas RLS según admin, optometrista, vendedor y cliente (incluidas en migración; pendientes de despliegue).
 - [x] Directorio de optometristas con campos mínimos y horarios disponibles; aplicar la segunda migración para habilitar las RPC.
 - [ ] Integración y pruebas contra Supabase Auth/Data API una vez aprobado el proyecto de destino.

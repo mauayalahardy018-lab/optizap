@@ -54,6 +54,13 @@ test('Optizap migrations, constraints and RLS', async t => {
     assert.equal(await count('profiles'), 1);
     assert.deepEqual((await rows('select name from public.brands order by name')).map(r => r.name), ['Essilor', 'Oakley', 'Persol', 'Ray-Ban', 'Tom Ford', 'ZEISS']);
   });
+  await t.test('reference seed is repeatable and preserves existing brand edits', async () => {
+    const seed = await readFile(new URL('../seed.sql',import.meta.url),'utf8');
+    await db.exec("update public.brands set description='Edited by admin' where slug='ray-ban'");
+    await db.exec(seed); await db.exec(seed);
+    assert.equal(await count('brands'),6);
+    assert.equal((await rows("select description from public.brands where slug='ray-ban'"))[0].description,'Edited by admin');
+  });
   await db.exec(`
     insert into auth.users(id, email, raw_user_meta_data) values
       ('${opto}', 'opto@example.test', '{}'), ('${reception}', 'reception@example.test', '{}'),
