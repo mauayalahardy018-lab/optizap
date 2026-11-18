@@ -215,5 +215,11 @@ export type CatalogFilters = {
   limit?: number;
   offset?: number;
 };
-export type ApiErrorCode = "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "CONFLICT" | "SLOT_UNAVAILABLE" | "UNAVAILABLE" | "INTERNAL_ERROR";
+export type AuthLoginInput = { email: string; password: string };
+export type AuthRegisterInput = AuthLoginInput & { full_name: string };
+export type AuthUserSummary = { id: string; email: string | null };
+export type AuthLoginResult = { user: AuthUserSummary };
+export type AuthRegisterResult = { user: AuthUserSummary | null; requires_email_confirmation: boolean };
+export type AuthLogoutResult = { signed_out: true };
+export type ApiErrorCode = "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "CONFLICT" | "SLOT_UNAVAILABLE" | "UNAVAILABLE" | "INTERNAL_ERROR" | "INVALID_CREDENTIALS" | "EMAIL_NOT_CONFIRMED" | "RATE_LIMITED" | "INVALID_CONFIRMATION";
 export type ApiResponse<T> = { data: T } | { error: { code: ApiErrorCode; message: string } };

@@ -3,6 +3,8 @@ import { createCatalogService, productKind } from "./catalog";
 import { createAppointmentService } from "./appointments";
 import { createPatientService } from "./patients";
 import { createUserService } from "./users";
+import { createAuthService } from "./auth";
+import { AUTH_CACHE_HEADERS, SupabaseConfigurationError } from "../lib/supabase/config";
 import { invalid, ServiceError, type Client } from "./core";
 
 function params(url: URL): Record<string, unknown> {
@@ -20,7 +22,7 @@ function params(url: URL): Record<string, unknown> {
   return output;
 }
 function response(body: ApiResponse<unknown>, status = 200) {
-  return Response.json(body,{ status, headers: { "Cache-Control": "private, no-store", "Vary": "Cookie", "X-Content-Type-Options": "nosniff" } });
+  return Response.json(body,{ status, headers: { ...AUTH_CACHE_HEADERS, "Vary": "Cookie", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer" } });
 }
 async function body(request: Request): Promise<unknown> {
   if (request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") invalid("Envía el cuerpo como application/json.");
@@ -46,7 +48,18 @@ export async function handleApi(request: Request, clientFactory: () => Promise<C
     const query = params(url);
     let data: unknown;
     let status = 200;
-    if (path[0] === "brands" && path.length <= 2 && method === "GET") {
+    if (path[0] === "auth" && path.length === 2) {
+      const auth = createAuthService(db);
+      if (path[1] === "login" && method === "POST") data = await auth.login(await body(request));
+      else if (path[1] === "register" && method === "POST") {
+        const result = await auth.register(await body(request));
+        data = result; status = result.requires_email_confirmation ? 202 : 201;
+      } else if (path[1] === "logout" && method === "POST") data = await auth.logout(request.body === null ? {} : await body(request));
+      else if ((path[1] === "confirm" || path[1] === "callback") && method === "GET") {
+        const location = path[1] === "confirm" ? await auth.confirmEmail(query) : await auth.exchangeCode(query);
+        return new Response(null,{ status: 303, headers: { ...AUTH_CACHE_HEADERS, Location: location, "Referrer-Policy": "no-referrer", Vary: "Cookie" } });
+      } else throw new ServiceError("NOT_FOUND","Ruta no encontrada.",404);
+    } else if (path[0] === "brands" && path.length <= 2 && method === "GET") {
       if (Object.keys(query).length) invalid("Marcas no acepta parámetros de consulta.");
       data = path[1] ? await catalog.getBrandBySlug(decodeURIComponent(path[1])) : await catalog.getBrands();
     } else if (path[0] === "catalog" && path.length >= 2 && path.length <= 4) {
@@ -87,6 +100,7 @@ export async function handleApi(request: Request, clientFactory: () => Promise<C
     } else throw new ServiceError("NOT_FOUND","Ruta no encontrada.",404);
     return response({ data },status);
   } catch (error) {
+    if (error instanceof SupabaseConfigurationError) return response({ error: { code: "UNAVAILABLE", message: "El servicio no está disponible. Intenta nuevamente más tarde." } },503);
     if (error instanceof ServiceError) return response({ error: { code: error.code, message: error.message } },error.status);
     return response({ error: { code: "INTERNAL_ERROR", message: "Ocurrió un error inesperado. Intenta nuevamente." } },500);
   }
