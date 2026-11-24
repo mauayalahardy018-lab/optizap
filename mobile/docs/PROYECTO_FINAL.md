@@ -159,8 +159,9 @@ se atribuyen a otros los commits de esta sesión.
 | Reintento mismo UUID | Saldo permanece en 6 | Verificado en Supabase |
 | Salida 999 con saldo 6 | Rechazo sin cambio | Verificado en Supabase |
 | Usuario sin perfil | Error `42501 Inventory staff required` | Verificado en Supabase |
-| Web comparte datos | Vista web consulta mismo saldo | Código implementado; falta prueba visual con sesión |
-| Instalación y cámara | APK abre y lee etiqueta | Pendiente de teléfono físico |
+| Acceso web | La vista de inventario abre sin errores | Verificado en navegador. Falta comprobar el saldo con una sesión |
+| Firma de distribución | APK firmado para `mx.optizap.mobile` | Firma v2 e identidad verificadas con Android SDK |
+| Instalación y cámara | APK abre y lee etiqueta | Pendiente en Android. El emulador local carece de imagen del sistema |
 | Sin red | Error sin confirmación falsa | Pendiente de teléfono físico |
 
 **Defecto corregido:** inicialmente `NULL NOT IN` permitió avanzar a una
