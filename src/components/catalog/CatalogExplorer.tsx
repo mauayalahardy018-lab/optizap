@@ -128,7 +128,7 @@ export function CatalogExplorer({
           <div>
             <span className="inline-flex items-center gap-1.5 rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700 ring-1 ring-sky-600/20">
               <Sparkles className="h-3.5 w-3.5" />
-              Catálogo Oficial Autorizado
+              Catálogo de óptica
             </span>
             <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">
               Marcas Internacionales, Armazones y Micas Oftálmicas
@@ -275,8 +275,8 @@ export function CatalogExplorer({
               )}
             </div>
 
-            <div className="flex items-center gap-2">
-              <div className="relative">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative max-w-full">
                 <Filter className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
                 <select
                   aria-label="Filtrar por material"
@@ -295,7 +295,7 @@ export function CatalogExplorer({
                 </select>
               </div>
 
-              <div className="relative">
+              <div className="relative max-w-full">
                 <SlidersHorizontal className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
                 <select
                   aria-label="Ordenar por precio"

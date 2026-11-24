@@ -1,4 +1,7 @@
-import React from "react";
+"use client";
+
+import Image from "next/image";
+import { useState } from "react";
 import type { CatalogItem } from "./mockCatalogData";
 
 export function ProductVisual({
@@ -9,6 +12,28 @@ export function ProductVisual({
   size?: "card" | "modal";
 }) {
   const heightClass = size === "modal" ? "h-52" : "h-44";
+  const product = item.kind === "lens" ? item.lens : item.frame;
+  const imageUrl = product.image_url;
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+
+  if (imageUrl?.startsWith("/catalogo/") && imageUrl !== failedUrl) {
+    const isLens = item.kind === "lens";
+    return (
+      <div className={`relative ${heightClass} overflow-hidden rounded-xl border border-slate-200 bg-white`}>
+        <div className={`absolute inset-x-3 top-3 ${isLens ? "bottom-8" : "bottom-3"}`}>
+          <Image
+            src={imageUrl}
+            alt={isLens ? `Referencia de ${item.brand.name}: ${product.name.split(" + ")[0]}` : `${item.brand.name} ${product.name}, ${product.sku}`}
+            fill
+            unoptimized
+            className="object-contain"
+            onError={() => setFailedUrl(imageUrl)}
+          />
+        </div>
+        {isLens && <span className="absolute inset-x-2 bottom-2 text-center text-xs text-slate-600">Imagen de referencia de la familia</span>}
+      </div>
+    );
+  }
 
   if (item.kind === "lens") {
     const { lens } = item;
