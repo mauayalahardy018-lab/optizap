@@ -349,3 +349,23 @@ Para la conexión real deben estar aplicadas las **tres migraciones** y configur
 - [x] (Solicitud Frontend) GET /api/users y PATCH /api/users/:id/role para listar profiles y cambiar roles desde /dashboard/usuarios con sesión Admin. Adaptación de updateUserRole documentada en sección 7.
 - [x] Estados de citas scheduled/confirmed/completed/cancelled: alta scheduled, endpoint de confirmación/completado/cancelación, permisos vendedor/Recepción y transiciones documentadas. Se conserva no_show del esquema existente.
 - [x] Expediente OD/OI con visual_acuity y pupillary_distance_mm monocular: entradas/salidas documentadas y roundtrip verificado en servicios y PostgreSQL.
+## Inventario móvil de armazones (Flutter)
+
+La aplicación Flutter y la web comparten las tablas `frames`, `brands`, `profiles`
+y `stock_movements`. El catálogo consulta el stock desde `frames`; no se copia
+el estado JSON de la PWA anterior.
+
+- `GET frames?sku=...`: consulta un armazón activo por SKU. Devuelve `id`,
+  `sku`, `name`, `stock` y la marca. La lectura sigue las políticas RLS.
+- `GET stock_movements?frame_id=...`: últimos movimientos; solo `admin` y
+  `vendedor` pueden leerlos.
+- `record_frame_movement(p_frame_id uuid, p_delta integer, p_note text,
+  p_request_id uuid) -> jsonb`: registra una entrada o salida de 1 a 999
+  unidades, devuelve `delta`, `stock_after` y `created_at`. Requiere
+  Supabase Auth y rol `admin` o `vendedor`. Verifica stock no negativo,
+  bloquea la fila y actualiza stock e historial en una transacción. Repetir
+  el mismo `p_request_id` y contenido devuelve el resultado previo sin
+  duplicar el movimiento; reutilizarlo con otro contenido produce error.
+
+El identificador de rol procede de `profiles` en la base de datos. El
+selector visual de roles de la web no otorga permisos reales.

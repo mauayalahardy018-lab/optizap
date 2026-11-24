@@ -114,6 +114,17 @@ export type Appointment = Timestamps & {
   reason: string | null;
   created_by: string | null;
 };
+export type StockMovement = {
+  id: string;
+  request_id: string;
+  frame_id: string;
+  actor_id: string;
+  delta: number;
+  stock_before: number;
+  stock_after: number;
+  note: string | null;
+  created_at: string;
+};
 
 type ForeignKey<Name extends string, Column extends string, Target extends string, One extends boolean = false> = {
   foreignKeyName: Name;
@@ -154,6 +165,10 @@ export type Database = {
         ForeignKey<"appointments_optometrist_id_fkey", "optometrist_id", "profiles">,
         ForeignKey<"appointments_created_by_fkey", "created_by", "profiles">
       ]>;
+      stock_movements: Table<StockMovement, "request_id" | "frame_id" | "actor_id" | "delta" | "stock_before" | "stock_after", [
+        ForeignKey<"stock_movements_frame_id_fkey", "frame_id", "frames">,
+        ForeignKey<"stock_movements_actor_id_fkey", "actor_id", "profiles">
+      ]>;
     };
     Views: { [_ in never]: never };
     Functions: {
@@ -163,6 +178,10 @@ export type Database = {
       };
       list_optometrists: { Args: Record<string, never>; Returns: OptometristSummary[] };
       create_clinical_exam: { Args: { p_record: Json; p_prescriptions: Json }; Returns: Json };
+      record_frame_movement: {
+        Args: { p_frame_id: string; p_delta: number; p_note: string | null; p_request_id: string };
+        Returns: Json;
+      };
     };
     Enums: {
       user_role: UserRole;
