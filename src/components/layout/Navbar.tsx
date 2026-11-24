@@ -9,6 +9,7 @@ import {
   FileText,
   Glasses,
   LayoutDashboard,
+  Package,
   ShieldCheck,
   Stethoscope,
   User,
@@ -58,6 +59,12 @@ export function Navbar() {
       href: "/catalogo",
       label: "Catálogo",
       icon: Glasses,
+      exact: false,
+    },
+    {
+      href: "/inventario",
+      label: "Inventario",
+      icon: Package,
       exact: false,
     },
     {
