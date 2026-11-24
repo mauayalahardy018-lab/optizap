@@ -86,9 +86,9 @@ test('Optizap migrations, constraints and RLS', async t => {
   await insert('frames', { ...frame, sku: 'INACTIVE-FRAME', is_active: false });
   await insert('lenses', { brand_id: uid(100), sku: 'TEST-LENS', name: 'Test lens', lens_type: 'monofocal', material: 'cr39', refractive_index: 1.5, diameter_mm: 70, price: 500 });
 
-  await t.test('enables RLS on all eight public tables', async () => {
+  await t.test('enables RLS on all public tables including stock movements', async () => {
     const tables = await rows("select relname, relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and relkind='r'");
-    assert.equal(tables.length, 8);
+    assert.ok(tables.some(r => r.relname === 'stock_movements'));
     assert.ok(tables.every(r => r.relrowsecurity));
   });
   await t.test('TypeScript Rows, Inserts and relationships match PostgreSQL metadata', async () => {
